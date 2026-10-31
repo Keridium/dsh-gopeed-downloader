@@ -1,0 +1,17 @@
+# Cordis patch for dsh-gopeed: inserts one plugin row into the active profile.
+#
+# The row id `gopeed` matters:
+#   - it is the settings namespace (`ns` returned by settings.describe())
+#   - the Web configuration page must register the slot key `dsh-gopeed#gopeed`
+# A second override with the same id replaces the whole `config` block
+# instead of merging into it, so keep this block complete.
+#
+# `token` is intentionally absent: the Config schema defaults it to `deepseek`,
+# and once a user saves the settings form the settings service writes it back
+# into this row.
+- insert:
+    - id: gopeed
+      name: dsh-gopeed
+      config:
+        host: 127.0.0.1
+        port: 9999
