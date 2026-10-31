@@ -3,8 +3,8 @@
  *
  * Layout:
  * - Config: host / port / token / timeoutMs / exePath / portScan / webhookMode / webhookPort /
- *   webhookNotify, all `.volatile()`, so edits in the DSH settings UI (Plugins -> Installed ->
- *   dsh-gopeed -> Config) take effect immediately.
+ *   webhookNotify / webhookToast, all `.volatile()`, so edits in the DSH settings UI (Plugins ->
+ *   Installed -> dsh-gopeed -> Config) take effect immediately.
  * - apply: registers six tools on ctx.tools (add / list / status / control / process / launch) plus
  *   gopeed_events, and starts the loopback webhook receiver when webhookMode is manual or auto.
  *   With webhookNotify on, an accepted event is delivered through up to THREE channels, none of
@@ -245,6 +245,18 @@ export const Config = z.object({
         'finishes. Needs a webhook listener (webhookMode manual or auto). A download started by gopeed_add is ' +
         'announced by its background job instead, so it is not repeated here. Nothing is ever posted into the ' +
         'chat, and this setting itself never wakes an idle agent. Set false to keep events cache-only.',
+    )
+    .volatile(),
+  webhookToast: z
+    .boolean()
+    // Off by default: Gopeed already posts its own notification through the Windows notification
+    // center, so a second toast is noise unless the user explicitly wants the extra detail.
+    .default(false)
+    .description(
+      'Show the plugin own bottom-right toast when a download finishes. Gopeed already posts its own ' +
+        'Windows notification, so this duplicates it - enable it only for the extra detail (name, size, ' +
+        'path). Affects user-facing toasts only; job wake-up (polling), the Agent.inject fallback and the ' +
+        'gopeed_events cache are unaffected.',
     )
     .volatile(),
 })
@@ -1132,6 +1144,13 @@ export function apply(ctx, config) {
   /** webhookNotify in effect. Volatile, so it is read when an event arrives, not at start. */
   const notifyEnabled = () => config.webhookNotify?.get?.() !== false
 
+  /**
+   * webhookToast in effect. Off by default because Gopeed posts its own Windows notification, so a
+   * second toast is noise unless the user asks for the extra detail. This gates the user-facing
+   * overlay only: the job wake-up and the Agent.inject fallback are deliberately not affected.
+   */
+  const toastEnabled = () => config.webhookToast?.get?.() === true
+
   /** The remembered Agent when it is still alive and usable, otherwise undefined. */
   const liveAgent = () => {
     try {
@@ -1302,7 +1321,8 @@ export function apply(ctx, config) {
   const handleWebhookEvent = (event) => {
     try {
       if (!notifyEnabled()) return
-      recordUiNotice(event)
+      // The toast is opt-in: Gopeed already posts its own Windows notification.
+      if (toastEnabled()) recordUiNotice(event)
       queueNotification(event)
     } catch {
       // Never let notification bookkeeping break the receiver.
@@ -1314,7 +1334,10 @@ export function apply(ctx, config) {
    * @param {string} rawUrl Request URL carrying the caller's `since` cursor.
    */
   const notificationFeed = (rawUrl) => {
-    const enabled = notifyEnabled() && webhookMode() !== 'off'
+    // `enabled` drives whether the client renders anything at all, so it must include the toast
+    // switch: with the toast off there is nothing to show even though events still land in the
+    // gopeed_events cache for the agent.
+    const enabled = notifyEnabled() && toastEnabled() && webhookMode() !== 'off'
     let since = 0
     try {
       since = Number(new URL(rawUrl).searchParams.get('since')) || 0

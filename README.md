@@ -434,6 +434,22 @@ the total is still **1217**.
 8. **The webhook listener binds loopback only.** A Gopeed running in Docker, or on another machine, cannot push to it without extra networking.
 9. **Download tracking does not survive a DSH restart.** A tracking job lives in the DSH process, so restarting DSH (or upgrading the plugin) drops every tracker; the downloads themselves continue inside Gopeed and are still visible to `gopeed_status`. There is no persistence and no re-attach -- that would need a durable job backend, which is out of scope. A plugin reload at least reports the loss: each live tracker settles as `killed` with a detail saying the download state is unknown.
 
+## Acknowledgments
+
+This plugin is an **independent, unofficial** integration. It talks to a locally running
+[Gopeed](https://github.com/GopeedLab/gopeed) (a fast, modern download manager for HTTP, BitTorrent,
+Magnet and ed2k) through its REST API. It does **not** bundle, link against, modify, or redistribute
+any Gopeed code: the two programs are separate processes and the only contract between them is the
+loopback HTTP API.
+
+- **Gopeed** is copyright (c) the GopeedLab authors and licensed under **GPL-3.0**. Use, install and distribute
+  Gopeed under its own licence -- nothing here changes that.
+- **This plugin** is MIT (see below) and is not produced, endorsed, or supported by the GopeedLab
+  project. Bug reports about Gopeed itself belong in the Gopeed repository, not here.
+
+If you find this plugin useful, the thanks mostly belong upstream: the Gopeed team built the program
+and the API that makes any of this possible.
+
 ## See also
 
 - [CHANGELOG.md](CHANGELOG.md) -- what changed in each released version.

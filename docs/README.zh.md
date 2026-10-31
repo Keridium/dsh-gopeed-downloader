@@ -460,3 +460,18 @@ DSH 每轮都会把每个工具的 `{name, description, parameters}` 投影进 s
    下载本身继续在 Gopeed 里进行，`gopeed_status` 仍能看到。没有持久化、也没有「重新接管」——那需要可持久化的
    job 后端，超出本插件的范围。插件重载至少会如实报告：每个还活着的跟踪器 settle 成 `killed`，detail 写明
    下载状态未知。
+
+---
+
+## 十、致谢与非官方声明
+
+本插件是一个**独立的、非官方的**集成。它通过 REST API 与本地运行的
+[Gopeed](https://github.com/GopeedLab/gopeed)（一个支持 HTTP / BitTorrent / 磁力 / ed2k 的现代下载器）通信，
+**不打包、不链接、不修改、也不分发** Gopeed 的任何代码：两者是各自独立的进程，唯一的契约就是那条回环 HTTP API。
+
+- **Gopeed** 版权归 GopeedLab 作者所有，采用 **GPL-3.0** 许可。按它自己的许可证使用、安装和分发 Gopeed，
+  本插件不改变这一点。
+- **本插件**采用 MIT 许可，**不是** GopeedLab 项目的产物，也未经其背书或支持。关于 Gopeed 本身的
+  bug 请提到 Gopeed 的仓库，而不是这里。
+
+如果这个插件对你有用，功劳大部分在上游：是 Gopeed 团队做出了这个程序，以及让这一切成为可能的 API。

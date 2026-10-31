@@ -76,6 +76,14 @@ window.__ModuleLoader__.load({
       verify: '保存后可以让 agent 调用 gopeed_process 确认连通性。',
       webhook: 'Webhook 推送（下载完成通知）',
       webhookHint: '下载完成后由 Gopeed 推送到插件；插件只在本地监听端口，不会主动发起网络请求。',
+      webhookPushOptional: 'Webhook 推送（可选）',
+      webhookDrawerExpand: '展开',
+      webhookDrawerCollapse: '收起',
+      webhookDutyTitle: 'Webhook 负责什么：',
+      webhookDutyWake: '「下载完成自动唤醒 agent」不依赖 webhook：它由 DSH 的后台任务每 3 秒轮询一次 Gopeed API 完成，不配 webhook 也照样能用。',
+      webhookDutyPush: 'webhook 只是可选增强：不配也能自动唤醒、也能用 gopeed_list 查任务；配了才有推送类能力——右下角 toast 通知、gopeed_events 的事件缓存，以及某个下载没有被 job 跟踪时的 Agent.inject 兜底。',
+      webhookDutySlower: '它不会让唤醒更快：唤醒走的是轮询，和 webhook 无关。',
+      webhookDutyRestart: '配置后必须完全退出并重启 Gopeed 才生效（只把窗口关到托盘不算重启）。',
       webhookModeOff: 'off — 默认，不启用',
       webhookModeOffHint: '不监听任何端口；下载完成后需要你自己调用 gopeed_list 查询状态。',
       webhookModeManual: 'manual — 手动配置',
@@ -85,6 +93,8 @@ window.__ModuleLoader__.load({
       webhookPort: 'Webhook 监听端口',
       webhookPortHint: '填一个 0–65535 的整数：0 = 由系统自动分配空闲端口（每次可能不同），填具体数字则固定使用它。',
       webhookPortRandom: '随机生成',
+      webhookToast: '右下角通知',
+      webhookToastHint: 'Gopeed 自己会在 Windows 通知中心弹一条。这里打开的话插件也会弹一条内容更详细的（名称 / 大小 / 路径），但会和 Gopeed 那条重复：想要详细信息就打开，嫌吵就关着。这个开关只影响给用户看的 toast，不影响 job 唤醒（轮询）、Agent.inject 兜底和 gopeed_events 事件缓存。',
       webhookPortInvalid: 'Webhook 端口必须是 0–65535 之间的整数（0 = 自动分配）。',
       webhookStatus: 'Webhook 状态',
       webhookStatusMode: '当前模式',
@@ -138,6 +148,14 @@ window.__ModuleLoader__.load({
       verify: 'After saving, ask the agent to call gopeed_process to verify connectivity.',
       webhook: 'Webhook push (download finished notifications)',
       webhookHint: 'Gopeed pushes status to the plugin when a download finishes; the plugin only listens on a local port and never starts a network request.',
+      webhookPushOptional: 'Webhook push (optional)',
+      webhookDrawerExpand: 'Expand',
+      webhookDrawerCollapse: 'Collapse',
+      webhookDutyTitle: 'What the webhook is for:',
+      webhookDutyWake: 'Automatic agent wake-up on download complete does NOT depend on the webhook: a DSH background task polls the Gopeed API every 3 seconds, so wake-up works with the webhook off.',
+      webhookDutyPush: 'The webhook is an optional enhancement only: wake-up and gopeed_list queries work without it; only push-based extras need it - the bottom-right toast notices, the gopeed_events event cache, and the Agent.inject fallback for a download no job is tracking.',
+      webhookDutySlower: 'It never makes wake-up faster: wake-up is polling, unrelated to the webhook.',
+      webhookDutyRestart: 'Once configured, Gopeed must be fully quit and restarted for it to take effect (closing the window to the tray does not count).',
       webhookModeOff: 'off - disabled (default)',
       webhookModeOffHint: 'Listen on no port; after a download finishes you have to ask gopeed_list yourself.',
       webhookModeManual: 'manual - configure by hand',
@@ -147,6 +165,8 @@ window.__ModuleLoader__.load({
       webhookPort: 'Webhook listen port',
       webhookPortHint: 'An integer from 0 to 65535: 0 lets the system pick a free port (it may differ each time), any number is pinned as-is.',
       webhookPortRandom: 'Random port',
+      webhookToast: 'Corner toast',
+      webhookToastHint: 'Gopeed already posts its own notification through the Windows notification center. Enabling this makes the plugin show its own toast with more detail (name / size / path), which duplicates the Gopeed one: turn it on for the detail, leave it off to stay quiet. This switch only affects user-facing toasts; it does not affect job wake-up (polling), the Agent.inject fallback, or the gopeed_events event cache.',
       webhookPortInvalid: 'Webhook port must be an integer between 0 and 65535 (0 = auto-assign).',
       webhookStatus: 'Webhook status',
       webhookStatusMode: 'Current mode',
@@ -301,6 +321,31 @@ window.__ModuleLoader__.load({
         border: '1px dashed rgba(127,127,127,0.42)',
         background: 'rgba(127,127,127,0.05)',
       },
+      // Collapsible webhook drawer: the button carries the expand/collapse word (no arrow
+      // glyph, so this file stays ASCII outside the zh dictionary), the summary line keeps
+      // the live mode readable while the body is collapsed.
+      drawerToggle: {
+        padding: '4px 12px',
+        borderRadius: '8px',
+        border: '1px solid rgba(127,127,127,0.42)',
+        background: 'rgba(127,127,127,0.10)',
+        color: 'inherit',
+        font: 'inherit',
+        fontSize: '12.5px',
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+      },
+      drawerSummary: { fontWeight: 600, fontSize: '12.5px' },
+      drawerBody: { display: 'grid', gap: '12px' },
+      // Always-visible responsibility block: rendered outside the collapsible body.
+      duty: {
+        display: 'grid',
+        gap: '4px',
+        padding: '9px 11px',
+        borderRadius: '8px',
+        border: '1px solid rgba(127,127,127,0.28)',
+        background: 'rgba(127,127,127,0.04)',
+      },
     }
 
     /** Radio order and the dictionary keys describing each webhook mode. */
@@ -429,6 +474,9 @@ window.__ModuleLoader__.load({
       const [webhookPort, setWebhookPort] = React.useState(
         value.webhookPort === undefined || value.webhookPort === null ? '0' : String(value.webhookPort),
       )
+      // Boolean, default off: Gopeed already shows its own Windows notification, so the plugin
+      // toast is opt-in. Only a strict `true` enables it; legacy strings must never coerce on.
+      const [webhookToast, setWebhookToast] = React.useState(value.webhookToast === true)
       const [busy, setBusy] = React.useState(false)
       const [notice, setNotice] = React.useState('')
       const [error, setError] = React.useState('')
@@ -438,6 +486,9 @@ window.__ModuleLoader__.load({
       // Restart is a destructive user action: it has its own busy flag and its own result line.
       const [restarting, setRestarting] = React.useState(false)
       const [restartResult, setRestartResult] = React.useState(null)
+      // The webhook section is collapsed by default: the page leads with the four connection
+      // fields, and the push machinery is opt-in detail most users never need.
+      const [webhookOpen, setWebhookOpen] = React.useState(false)
       React.useEffect(
         () => () => {
           if (copiedTimer.current) clearTimeout(copiedTimer.current)
@@ -593,6 +644,11 @@ window.__ModuleLoader__.load({
         if (webhookPortValue !== Number(value.webhookPort ?? 0)) {
           ops.push({ op: 'set', path: ['webhookPort'], value: webhookPortValue })
         }
+        // Boolean op: no numeric conversion and no validation, only the change check.
+        const nextWebhookToast = webhookToast === true
+        if (nextWebhookToast !== (value.webhookToast === true)) {
+          ops.push({ op: 'set', path: ['webhookToast'], value: nextWebhookToast })
+        }
         if (ops.length === 0) {
           setNotice(t('noChanges'))
           return
@@ -694,109 +750,13 @@ window.__ModuleLoader__.load({
           }),
           note(styles.hint, t('exeHint')),
         ),
+        // Webhook drawer. Collapsing is React state, not <details> and not display:none:
+        // while collapsed the inner controls are not rendered at all, so no hidden webhook
+        // input can be submitted or mistaken for a real one. The mode stays readable in the
+        // summary line, which is why the reader can tell off/manual/auto without opening it.
         h(
           'div',
           { style: styles.field },
-          h('span', { style: styles.label }, t('webhook')),
-          note(styles.hint, t('webhookHint')),
-          WEBHOOK_MODES.map((mode) =>
-            h(
-              'label',
-              { key: mode, style: styles.option },
-              h(
-                'span',
-                { style: styles.optionHead },
-                h('input', {
-                  type: 'radio',
-                  name: 'dsh-gopeed-webhook-mode',
-                  value: mode,
-                  checked: webhookMode === mode,
-                  disabled: busy || state.writable === false,
-                  onChange: () => setWebhookMode(mode),
-                }),
-                h('span', { style: styles.optionLabel }, t(WEBHOOK_MODE_LABEL[mode])),
-              ),
-              h('span', { style: { ...styles.hint, display: 'block' } }, t(WEBHOOK_MODE_HINT[mode])),
-            ),
-          ),
-        ),
-        webhookPortFieldVisible
-          ? h(
-              'div',
-              { style: styles.field },
-              h('label', { style: styles.label, htmlFor: 'dsh-gopeed-webhook-port' }, t('webhookPort')),
-              h(
-                'div',
-                { style: styles.row },
-                h('input', {
-                  id: 'dsh-gopeed-webhook-port',
-                  className: PORT_CLASS,
-                  // Same reasoning as the Gopeed API port above: a text input plus
-                  // inputMode avoids the native spinner entirely.
-                  style: { ...styles.input, flex: '1 1 140px', width: 'auto', minWidth: 0 },
-                  type: 'text',
-                  inputMode: 'numeric',
-                  autoComplete: 'off',
-                  value: webhookPort,
-                  disabled: busy || state.writable === false,
-                  onChange: (event) => setWebhookPort(event.target.value),
-                }),
-                h(
-                  'button',
-                  {
-                    type: 'button',
-                    style: styles.button,
-                    disabled: busy || state.writable === false,
-                    onClick: randomWebhookPort,
-                  },
-                  t('webhookPortRandom'),
-                ),
-              ),
-              note(styles.hint, t('webhookPortHint')),
-            )
-          : null,
-        h(
-          'div',
-          { style: styles.panel },
-          h('span', { style: styles.label }, t('webhookStatus')),
-          note(styles.note, `${t('webhookStatusMode')}: ${t(WEBHOOK_MODE_LABEL[webhookMode])}`),
-          // Each mode says only what applies to it: off is a warning, manual
-          // shows the concrete URL (or why there is none yet), auto explains
-          // that the plugin writes it and that Gopeed must restart.
-          webhookMode === 'off' ? note(styles.errNote, t('webhookOffWarning')) : null,
-          webhookMode === 'manual' && webhookPortFixed
-            ? h(
-                'div',
-                { style: styles.field },
-                h('span', { style: styles.label }, t('webhookUrl')),
-                h(
-                  'div',
-                  { style: styles.row },
-                  h('code', { style: styles.url }, webhookUrl),
-                  h(
-                    'button',
-                    {
-                      type: 'button',
-                      style: styles.button,
-                      title: webhookUrl,
-                      onClick: copyWebhookUrl,
-                    },
-                    copied ? t('webhookCopied') : t('webhookCopy'),
-                  ),
-                ),
-              )
-            : null,
-          webhookMode === 'manual' && !webhookPortFixed
-            ? note(styles.warnNote, t('webhookUrlUnfixed'))
-            : null,
-          webhookMode === 'manual' && webhookPortFixed
-            ? note(styles.hint, t('webhookManualStep'))
-            : null,
-          webhookMode === 'manual' ? note(styles.warnNote, t('webhookNeedPeer')) : null,
-          webhookMode === 'auto' ? note(styles.note, t('webhookAutoNote')) : null,
-          webhookMode === 'auto' ? note(styles.warnNote, t('webhookRestartWarning')) : null,
-          // The only restart entry point in the whole plugin. It is a user gesture by design:
-          // no tool and no agent call can reach the Host restart route.
           h(
             'div',
             { style: styles.row },
@@ -804,18 +764,195 @@ window.__ModuleLoader__.load({
               'button',
               {
                 type: 'button',
-                style: restarting ? { ...styles.danger, ...styles.dangerBusy } : styles.danger,
-                disabled: restarting,
-                onClick: restartGopeed,
-                title: t('restartHint'),
+                id: 'dsh-gopeed-webhook-toggle',
+                style: styles.drawerToggle,
+                'aria-expanded': webhookOpen ? 'true' : 'false',
+                'aria-controls': 'dsh-gopeed-webhook-drawer',
+                onClick: () => setWebhookOpen((open) => !open),
               },
-              restarting ? t('restarting') : t('restart'),
+              webhookOpen ? t('webhookDrawerCollapse') : t('webhookDrawerExpand'),
             ),
-            note(styles.hint, t('restartHint')),
+            h(
+              'span',
+              { style: styles.drawerSummary },
+              `${t('webhookPushOptional')} - ${t('webhookStatusMode')}: ${webhookMode}`,
+            ),
           ),
-          restartResult
-            ? note(restartResult.ok ? styles.okNote : styles.errNote, restartResult.message)
-            : null,
+          // Responsibility block. Deliberately OUTSIDE the collapsible body: this is the answer
+          // to "what does the webhook actually do", and it has to be readable while collapsed.
+          h(
+            'div',
+            { style: styles.duty },
+            h('span', { style: styles.label }, t('webhookDutyTitle')),
+            note(styles.note, t('webhookDutyWake')),
+            note(styles.note, t('webhookDutyPush')),
+            note(styles.note, t('webhookDutySlower')),
+            note(styles.note, t('webhookDutyRestart')),
+          ),
+          h(
+            'div',
+            { id: 'dsh-gopeed-webhook-drawer', style: styles.drawerBody },
+            webhookOpen
+              ? [
+                  h(
+                    'div',
+                    { key: 'modes', style: styles.field },
+                    note(styles.hint, t('webhookHint')),
+                    WEBHOOK_MODES.map((mode) =>
+                      h(
+                        'label',
+                        { key: mode, style: styles.option },
+                        h(
+                          'span',
+                          { style: styles.optionHead },
+                          h('input', {
+                            type: 'radio',
+                            name: 'dsh-gopeed-webhook-mode',
+                            value: mode,
+                            checked: webhookMode === mode,
+                            disabled: busy || state.writable === false,
+                            onChange: () => setWebhookMode(mode),
+                          }),
+                          h('span', { style: styles.optionLabel }, t(WEBHOOK_MODE_LABEL[mode])),
+                        ),
+                        h(
+                          'span',
+                          { style: { ...styles.hint, display: 'block' } },
+                          t(WEBHOOK_MODE_HINT[mode]),
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Toast switch: user-facing notification only. It never changes wake-up,
+                  // the Agent.inject fallback, or the events cache, so it lives beside the mode
+                  // radios instead of pretending to be a transport setting.
+                  h(
+                    'label',
+                    { key: 'toast', style: styles.option },
+                    h(
+                      'span',
+                      { style: styles.optionHead },
+                      h('input', {
+                        type: 'checkbox',
+                        id: 'dsh-gopeed-webhook-toast',
+                        checked: webhookToast === true,
+                        disabled: busy || state.writable === false,
+                        onChange: (event) => setWebhookToast(event.target.checked === true),
+                      }),
+                      h('span', { style: styles.optionLabel }, t('webhookToast')),
+                    ),
+                    h(
+                      'span',
+                      { style: { ...styles.hint, display: 'block' } },
+                      t('webhookToastHint'),
+                    ),
+                  ),
+                  webhookPortFieldVisible
+                    ? h(
+                        'div',
+                        { key: 'port', style: styles.field },
+                        h(
+                          'label',
+                          { style: styles.label, htmlFor: 'dsh-gopeed-webhook-port' },
+                          t('webhookPort'),
+                        ),
+                        h(
+                          'div',
+                          { style: styles.row },
+                          h('input', {
+                            id: 'dsh-gopeed-webhook-port',
+                            className: PORT_CLASS,
+                            // Same reasoning as the Gopeed API port above: a text input plus
+                            // inputMode avoids the native spinner entirely.
+                            style: { ...styles.input, flex: '1 1 140px', width: 'auto', minWidth: 0 },
+                            type: 'text',
+                            inputMode: 'numeric',
+                            autoComplete: 'off',
+                            value: webhookPort,
+                            disabled: busy || state.writable === false,
+                            onChange: (event) => setWebhookPort(event.target.value),
+                          }),
+                          h(
+                            'button',
+                            {
+                              type: 'button',
+                              style: styles.button,
+                              disabled: busy || state.writable === false,
+                              onClick: randomWebhookPort,
+                            },
+                            t('webhookPortRandom'),
+                          ),
+                        ),
+                        note(styles.hint, t('webhookPortHint')),
+                      )
+                    : null,
+                  h(
+                    'div',
+                    { key: 'status', style: styles.panel },
+                    h('span', { style: styles.label }, t('webhookStatus')),
+                    note(styles.note, `${t('webhookStatusMode')}: ${t(WEBHOOK_MODE_LABEL[webhookMode])}`),
+                    // Each mode says only what applies to it: off is a warning, manual
+                    // shows the concrete URL (or why there is none yet), auto explains
+                    // that the plugin writes it and that Gopeed must restart.
+                    webhookMode === 'off' ? note(styles.errNote, t('webhookOffWarning')) : null,
+                    webhookMode === 'manual' && webhookPortFixed
+                      ? h(
+                          'div',
+                          { style: styles.field },
+                          h('span', { style: styles.label }, t('webhookUrl')),
+                          h(
+                            'div',
+                            { style: styles.row },
+                            h('code', { style: styles.url }, webhookUrl),
+                            h(
+                              'button',
+                              {
+                                type: 'button',
+                                style: styles.button,
+                                title: webhookUrl,
+                                onClick: copyWebhookUrl,
+                              },
+                              copied ? t('webhookCopied') : t('webhookCopy'),
+                            ),
+                          ),
+                        )
+                      : null,
+                    webhookMode === 'manual' && !webhookPortFixed
+                      ? note(styles.warnNote, t('webhookUrlUnfixed'))
+                      : null,
+                    webhookMode === 'manual' && webhookPortFixed
+                      ? note(styles.hint, t('webhookManualStep'))
+                      : null,
+                    webhookMode === 'manual' ? note(styles.warnNote, t('webhookNeedPeer')) : null,
+                    webhookMode === 'auto' ? note(styles.note, t('webhookAutoNote')) : null,
+                    webhookMode === 'auto'
+                      ? note(styles.warnNote, t('webhookRestartWarning'))
+                      : null,
+                    // The only restart entry point in the whole plugin. It is a user gesture by
+                    // design: no tool and no agent call can reach the Host restart route.
+                    h(
+                      'div',
+                      { style: styles.row },
+                      h(
+                        'button',
+                        {
+                          type: 'button',
+                          style: restarting ? { ...styles.danger, ...styles.dangerBusy } : styles.danger,
+                          disabled: restarting,
+                          onClick: restartGopeed,
+                          title: t('restartHint'),
+                        },
+                        restarting ? t('restarting') : t('restart'),
+                      ),
+                      note(styles.hint, t('restartHint')),
+                    ),
+                    restartResult
+                      ? note(restartResult.ok ? styles.okNote : styles.errNote, restartResult.message)
+                      : null,
+                  ),
+                ]
+              : null,
+          ),
         ),
         h(
           'div',
