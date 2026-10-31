@@ -409,6 +409,27 @@ export function apply(ctx, config) {
     }),
   })
 
+  /**
+   * gopeed_add's own client: the same connection parameters as `client` above (a detected port
+   * still wins over the configured one), plus a per-call request timeout that gopeed_add squeezes
+   * into its internal budget. 0 means "use Config.timeoutMs", which is what every other tool keeps
+   * doing through `client`. A separate instance keeps one call's squeeze away from the others.
+   */
+  let addRequestTimeoutMs = 0
+  const addClient = createGopeedClient({
+    resolve: () => {
+      const budget = Number(addRequestTimeoutMs)
+      const configured = config.timeoutMs.get()
+      return {
+        host: config.host.get(),
+        port: autoPort > 0 ? autoPort : Number(config.port.get()) || 0,
+        token: config.token.get(),
+        // Only ever shorten: a generous budget must not extend a deliberately short config value.
+        timeoutMs: budget > 0 ? Math.min(budget, configured) : configured,
+      }
+    },
+  })
+
   // ---------------------------------------------------------------------------------------------
   // Sandbox seam (strategy 3): actions go through the sandbox, diagnostics stay direct.
   //
@@ -1541,10 +1562,16 @@ export function apply(ctx, config) {
     // the whole budget.
     autoPort = 0
     autoPortAt = 0
-    const deadline = Date.now() + 15000
+    const probeStartedAt = Date.now()
+    const deadline = probeStartedAt + 15000
     let port = apiPort || Number(config.port.get()) || 0
     let after = { state: 'unknown', detail: 'not probed yet' }
     for (;;) {
+      // Same two rules as gopeed_launch: check the budget BEFORE an iteration (the old trailing
+      // check ran one more detect+probe after the deadline had passed), and treat 'unauthorized'
+      // as terminal. This runner has no DSH tool timeout behind it, so the wasted time here is
+      // spent in front of a human who just pressed "Restart Gopeed".
+      if (Date.now() >= deadline) break
       const detected = await ensureApiPort(true)
       if (detected > 0) port = detected
       if (port > 0) {
@@ -1556,10 +1583,13 @@ export function apply(ctx, config) {
           waitMs: 1800,
         })
         if (after.state === 'ok') break
+        if (after.state === 'unauthorized') break
       }
-      if (Date.now() >= deadline) break
       await new Promise((resolve) => setTimeout(resolve, 700))
     }
+    // How long the readiness probe actually ran, for the failure text below: a fixed "15s" would
+    // be a lie once the loop exits early on a terminal state.
+    const probedMs = Date.now() - probeStartedAt
     const pid = Number(launch.pid) || 0
     const sandboxFacts = {
       launchSandboxed: Boolean(launch.sandbox?.sandboxed),
@@ -1575,7 +1605,7 @@ export function apply(ctx, config) {
         pid,
         apiState: after.state,
         stage: 'api',
-        message: `Gopeed was restarted (pid ${pid})${pidNote} but it did not answer within 15s (${after.state}: ${after.detail}). It may still be loading; check gopeed_process in a moment.`,
+        message: `Gopeed was restarted (pid ${pid})${pidNote} but it did not become ready (last state: ${after.state} after ${probedMs}ms: ${after.detail}). It may still be loading; check gopeed_process in a moment.`,
         ...sandboxFacts,
       }
     }
@@ -1755,8 +1785,32 @@ export function apply(ctx, config) {
     return value.trim()
   }
 
-  /** Workspace directory of the calling session, or '' when this host/session does not expose one. */
+  /**
+   * Directory the workspace download target saves into, or '' when this host/session exposes none.
+   *
+   * `session.header.cwd` is the directory the session was CREATED in (persisted as
+   * record.identity.cwd), so it never moves: after "working_directory cd D:\projects\foo" a
+   * download still landed in the creation-time project. The live value is the `workingDirectory`
+   * service's projection, which starts at the header and is updated by every
+   * `working-directory/change` event - exactly the directory the `working_directory` tool
+   * reports, and the one the fs tools resolve relative paths against. Reading it is synchronous
+   * (`Service.get(session)` folds the in-memory session log, no filesystem I/O), so the download
+   * path stays a synchronous decision. The header remains the fallback for a host that composes no
+   * workingDirectory service.
+   * @param {any} exec Tool run context.
+   * @returns {string} Absolute directory, or '' when neither source has one.
+   */
   const sessionWorkspaceOf = (exec) => {
+    try {
+      const session = exec?.agent?.session
+      const directories = lookupService(ctx, 'workingDirectory')
+      if (session && directories && typeof directories.get === 'function') {
+        const live = directories.get(session)
+        if (typeof live === 'string' && live.trim()) return live.trim()
+      }
+    } catch {
+      // No projection (or no such service): fall through to the creation-time header.
+    }
     try {
       const cwd = exec?.agent?.session?.header?.cwd
       return typeof cwd === 'string' ? cwd.trim() : ''
@@ -1812,6 +1866,59 @@ export function apply(ctx, config) {
       }
     }
     return { path: undefined, note: '' }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // gopeed_add's own time budget.
+  //
+  // timeoutMs below is the DSH TOOL timeout: when it expires DSH kills the call and the tool never
+  // gets to answer, so a cold start showed up as "timed out" instead of a real result. The old
+  // shape overran it easily: ensureApiPort alone may spend ~32s (tasklist 4s + Get-Process 8s +
+  // netstat 8s + Get-NetTCPConnection 12s, plus up to 3s per probed port), and the create request
+  // and its read-back each allowed Config.timeoutMs (up to 120000).
+  //
+  // Fix: one internal budget, derived from the tool timeout, bounds EVERY wait, and each phase
+  // that runs out reports what to do instead of running into the outer kill. Worst case:
+  //   port phase  <= ADD_PORT_BUDGET_MS (12000)
+  //   create      <= remaining - ADD_REQUEST_RESERVE_MS (10500 at worst)
+  //   read-back   <= remaining (3000 at worst)
+  //   total       <= ADD_BUDGET_MS (22500) < ADD_TOOL_TIMEOUT_MS (25000)
+  // ---------------------------------------------------------------------------------------------
+
+  /** DSH tool timeout for gopeed_add; the same number is declared on the tool below. */
+  const ADD_TOOL_TIMEOUT_MS = 25000
+  /** Head room kept for wrapping up and returning, so the call ends before DSH kills it. */
+  const ADD_BUDGET_MARGIN_MS = 2500
+  /** Internal budget: every wait inside gopeed_add derives from it. */
+  const ADD_BUDGET_MS = ADD_TOOL_TIMEOUT_MS - ADD_BUDGET_MARGIN_MS
+  /** Hard slice for finding the API port, the only phase that can spend tens of seconds. */
+  const ADD_PORT_BUDGET_MS = 12000
+  /** Kept back from the port phase so a port that IS found still gets a real create request. */
+  const ADD_REQUEST_RESERVE_MS = 3000
+
+  /**
+   * Await `promise`, but stop waiting after `ms` and throw `message` instead.
+   *
+   * The abandoned promise is deliberately left running: it is a read-only probe that publishes the
+   * detected port into the process cache, so finishing later only makes the next call faster. Its
+   * rejection is swallowed here so it can never surface as an unhandled rejection.
+   * @param {Promise<any>} promise Work to bound.
+   * @param {number} ms Maximum time to wait for it.
+   * @param {string} message Error text used when the bound is hit.
+   */
+  const cappedAwait = async (promise, ms, message) => {
+    promise.catch(() => {})
+    let timer
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error(message)), Math.max(1, ms))
+        }),
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   ctx.tools.register({
@@ -1886,22 +1993,42 @@ export function apply(ctx, config) {
       kind: 'fetch',
       rawInput: args,
     }),
-    timeoutMs: 25000,
+    timeoutMs: ADD_TOOL_TIMEOUT_MS,
     async execute(args, exec) {
       rememberAgent(exec)
-      await ensureApiPort()
       const url = reqString(args?.url, 'url')
       const saveTarget = resolveDownloadPath(args?.path, exec)
       const taskName = optString(args?.name)
+      const deadline = Date.now() + ADD_BUDGET_MS
+      const remaining = () => deadline - Date.now()
       try {
-        const taskId = await client.create({ url, path: saveTarget.path, name: taskName || undefined })
+        // The port phase gets a hard slice instead of its own worst case, and gives up with an
+        // actionable message rather than letting the DSH timeout kill the call.
+        const portSlice = Math.min(
+          ADD_PORT_BUDGET_MS,
+          Math.max(1000, remaining() - ADD_REQUEST_RESERVE_MS),
+        )
+        await cappedAwait(
+          ensureApiPort(),
+          portSlice,
+          `gave up detecting the Gopeed API port after ${portSlice}ms, so nothing was submitted. ` +
+            'Retry in a moment - a cold Gopeed may still be starting - or set "port" in the plugin ' +
+            'config to the fixed port shown under Gopeed -> Settings -> Advanced -> Protocol.',
+        )
+        // Every request below is capped by what is left of the budget, so Config.timeoutMs (up to
+        // 120000) can no longer push the whole call past the DSH timeout.
+        addRequestTimeoutMs = Math.max(1000, remaining() - 1500)
+        const taskId = await addClient.create({ url, path: saveTarget.path, name: taskName || undefined })
         // Read the task back: when `path` is omitted, Gopeed does NOT leave the save dir empty -- it
         // fills meta.opts.path with the downloadDir from its own settings. Reporting the caller's
         // empty argument would leave the agent with no idea where the file landed. One loopback GET.
         let resolvedPath = saveTarget.path || ''
         let resolvedName = taskName
         try {
-          const created = normalizeTask(await client.get(taskId))
+          // Best-effort read-back; it gets only what is left of the budget (>= 500ms), never the
+          // full Config.timeoutMs.
+          addRequestTimeoutMs = Math.max(500, remaining())
+          const created = normalizeTask(await addClient.get(taskId))
           if (created && created.path) resolvedPath = created.path
           if (!resolvedName && created && created.name) resolvedName = created.name
         } catch {
@@ -1916,7 +2043,7 @@ export function apply(ctx, config) {
           url,
           name: resolvedName,
           path: resolvedPath,
-          baseUrl: client.baseUrl(),
+          baseUrl: addClient.baseUrl(),
           jobId: tracked.jobId,
           // Path fallback facts share the one additive note field: the output schema is fixed, and
           // a note the agent can read is better than a silently redirected download.
@@ -1924,6 +2051,9 @@ export function apply(ctx, config) {
         }
       } catch (error) {
         fail('add', error, exec)
+      } finally {
+        // Never let one call's squeeze leak into another call's requests.
+        addRequestTimeoutMs = 0
       }
     },
   })
@@ -2536,10 +2666,14 @@ export function apply(ctx, config) {
       // Detect and probe in a loop instead.
       autoPort = 0
       autoPortAt = 0
-      const deadline = Date.now() + 15000
+      const probeStartedAt = Date.now()
+      const deadline = probeStartedAt + 15000
       let port = Number(config.port.get()) || 0
       let after = { state: 'unknown', detail: 'not probed yet' }
       for (;;) {
+        // Check the budget BEFORE an iteration, not after it: the old trailing check ran one more
+        // full detect+probe (and one more 700ms sleep) after the deadline had already passed.
+        if (Date.now() >= deadline) break
         const detected = await ensureApiPort(true)
         if (detected > 0) port = detected
         if (port > 0) {
@@ -2551,10 +2685,17 @@ export function apply(ctx, config) {
             waitMs: 1800,
           })
           if (after.state === 'ok') break
+          // 'unauthorized' is a terminal answer, not a transient one: the port already proved alive
+          // with an HTTP 401, and a wrong token cannot become right by waiting. Retrying it burned
+          // the whole 15s budget to reach a diagnosis the first probe already had. Only
+          // 'refused' / 'timeout' / 'error' are worth another round.
+          if (after.state === 'unauthorized') break
         }
-        if (Date.now() >= deadline) break
         await new Promise((resolve) => setTimeout(resolve, 700))
       }
+      // How long the readiness probe actually ran. Used in the messages below: a fixed "15s" is a
+      // lie once the loop exits early, which is now the normal case for a wrong token.
+      const probedMs = Date.now() - probeStartedAt
       // The loop's placeholder state is 'unknown', which is NOT in the output schema's enum. When
       // the port cannot be determined at all (process table invisible, portScan off) the placeholder
       // would survive to the return value and DSH would reject the whole tool call as invalid output,
@@ -2562,7 +2703,7 @@ export function apply(ctx, config) {
       if (after.state === 'unknown') {
         after = {
           state: 'error',
-          detail: `Gopeed was started (pid ${launch.pid || launch.pid === 0 ? launch.pid : 'unknown'}) but its listening port could not be determined within 15s`,
+          detail: `Gopeed was started (pid ${launch.pid || launch.pid === 0 ? launch.pid : 'unknown'}) but its listening port could not be determined within ${probedMs}ms`,
         }
       }
       const ok = after.state === 'ok'
@@ -2579,7 +2720,7 @@ export function apply(ctx, config) {
         apiState: after.state,
         message: ok
           ? `Started Gopeed (pid ${launch.pid})${pidNote}; ready: ${after.detail}.${confineText}`
-          : `Started Gopeed (pid ${launch.pid})${pidNote}, but it did not answer within 15s (${after.state}: ${after.detail}). Gopeed may still be loading; check again with gopeed_process later.${confineText}`,
+          : `Started Gopeed (pid ${launch.pid})${pidNote}, but it did not become ready (last state: ${after.state} after ${probedMs}ms: ${after.detail}). Gopeed may still be loading; check again with gopeed_process later.${confineText}`,
         ...launchSandbox,
       }
     },

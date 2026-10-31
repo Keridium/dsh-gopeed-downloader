@@ -19,7 +19,7 @@ REST 类工具跨平台，进程控制仅支持 Windows。
   **`gopeed_events`**（读下载完成事件；auto 模式下可保存 Webhook 配置）
 - **进 system prompt 的常驻开销只有 1452 字符**（约 363 token，按 4 字符/token 粗略折算）：7 个工具的「名字 + 一段英文短语描述 + 极简参数」；
   工具返回的正文同样是英文（工具输出也属于 agent 可见内容）。合并与精简过程见「七、实测记录」
-- **下载保存位置可选，不是藏起来的默认值**：`downloadTarget` 三选一——`workspace`（默认，当前会话的工作区目录）/
+- **下载保存位置可选，不是藏起来的默认值**：`downloadTarget` 三选一——`workspace`（默认，会话的当前工作目录，`cd` 之后跟着变）/
   `gopeed`（交给 Gopeed 自己的下载目录）/ `custom`（用 `customDownloadPath`）。agent 显式传 `path` 时永远以它为准。
   目标目录解析不出来时会回落到 Gopeed 的目录，并在 `gopeed_add` 返回的 `jobNote` 里说明；任务创建后还会回读一次，
   因此返回的 `path` 是**实际落盘目录**，不是把入参原样抄回来
@@ -64,7 +64,7 @@ dsh-gopeed/
 
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `downloadTarget` | enum `workspace` / `gopeed` / `custom` | `workspace` | `gopeed_add` 把文件存到哪里。`workspace` = 当前会话自己的工作区目录；`gopeed` = 不传路径，让 Gopeed 用它在自己设置里配的下载目录；`custom` = 用 `customDownloadPath`。agent 显式传 `path` 时永远优先 |
+| `downloadTarget` | enum `workspace` / `gopeed` / `custom` | `workspace` | `gopeed_add` 把文件存到哪里。`workspace` = 会话的当前工作目录（用 `working_directory` 切过目录后就是新目录）；`gopeed` = 不传路径，让 Gopeed 用它在自己设置里配的下载目录；`custom` = 用 `customDownloadPath`。agent 显式传 `path` 时永远优先 |
 | `customDownloadPath` | string | **空** | `downloadTarget` 为 `custom` 时使用的绝对目录，首尾空白会被裁掉。默认空，为空时回落到 Gopeed 自己的目录（配置页在输入框下方常驻说明这一点，placeholder 也写「留空 = Gopeed 默认目录」）；其它 target 下忽略 |
 | `host` | string | `127.0.0.1` | Gopeed 监听地址（Gopeed 设置 → 高级 → 协议（TCP）里的那个地址）。**只填 IP 或主机名**：粘成 `http://…` 或 `127.0.0.1:9999` 会被当场拒绝；裸 IPv6 要写成方括号形式 `[::1]` |
 | `port` | number | `0` | `0` = 自动检测：向 Windows 问出正在运行的 Gopeed 实际占用的端口。填数字才是钉死，且要先去 Gopeed 里把端口改成同一个数（Gopeed 新装是端口 `0`，每次启动随机，所以它没有「默认端口」） |
@@ -124,7 +124,7 @@ dsh-gopeed/
 
 | 界面标签 | 字段 | 填什么 |
 |---|---|---|
-| **下载位置** | `downloadTarget` | 三选一：**工作区**（默认，当前会话目录）/ **Gopeed 默认目录** / **自定义**。选「自定义」时下面会多出「自定义路径」输入框（`customDownloadPath`） |
+| **下载位置** | `downloadTarget` | 三选一：**工作区**（默认，当前工作目录，`cd` 之后跟着变）/ **Gopeed 默认目录** / **自定义**。选「自定义」时下面会多出「自定义路径」输入框（`customDownloadPath`） |
 | **自定义路径** | `customDownloadPath` | 只有选「自定义」时才出现。默认空；留空 = 回落到 Gopeed 自己的目录，填一个绝对目录（例如 `D:\Downloads`）才是真正的自定义路径。输入框下方和 placeholder 都会写明这一点 |
 | **Gopeed 监听地址** | `host` | 默认 `127.0.0.1`，**必填**（留空会被拒绝保存）。**只填 IP 或主机名**，不要带 `http://`，也不要带端口；裸 IPv6 要写成 `[::1]` |
 | **端口** | `port` | 默认 `0` = **自动检测**；留空会被拒绝保存（要自动检测就填 `0`），在 Gopeed 里钉了固定端口时则填**同一个数字**（例如 `9999`） |
@@ -173,11 +173,14 @@ Token 框留空就不会写回，旧 Token 保持有效。上方有实时的 `�
 保存目录按下面的顺序决定，命中即停：
 
 1. `gopeed_add` 显式传入的 `path`；
-2. `downloadTarget` 为 `workspace`（默认）时，调用方会话自己的工作区目录；
+2. `downloadTarget` 为 `workspace`（默认）时，会话的**当前工作目录**（即 `working_directory` 工具报告的那个目录，`cd` 之后会变）；
 3. `downloadTarget` 为 `custom` 且 `customDownloadPath` 非空时，用这个目录；
 4. 否则不传路径，由 **Gopeed** 用它自己设置里的下载目录。
 
-回落不会静默发生：会话工作区取不到（宿主没有暴露 `session.header.cwd`），或者选了 `custom` 但路径为空时，
+这里说的「当前工作目录」是**运行期**的值，不是会话创建时的目录：插件优先读 `workingDirectory` 服务的投影
+（同步、无 I/O），宿主没有该服务时才回落到 `session.header.cwd`。
+
+回落不会静默发生：当前工作目录取不到（两种来源都没有值），或者选了 `custom` 但路径为空时，
 下载仍然会落到 Gopeed 的目录，同时 `jobNote` 明确写出用了哪个回落。
 
 `gopeed_add` 还会在创建成功后回读一次任务：即使没传路径，Gopeed 也会把实际目录填进 `meta.opts.path`。
@@ -421,7 +424,7 @@ gopeed_launch  -> alreadyRunning=true, launched=false
 ### 工具常驻开销：2714 → 1452 字符（约 679 → 363 token，按 4 字符/token 粗略折算）
 
 DSH 每轮都会把每个工具的 `{name, description, parameters}` 投影进 system prompt（`output.schema`
-和 render 不进），所以这部分是纯常驻成本。9 个历史入口收敛成 7 个工具后（当前工作树实测，未发布）：
+和 render 不进），所以这部分是纯常驻成本。9 个历史入口收敛成 7 个工具后（0.3.1 工作树实测，与 0.3.0 相同）：
 
 | 工具（合并前） | 字符 | 工具（现在） | 字符 |
 |---|---:|---|---:|
@@ -516,6 +519,10 @@ explains it)` 结尾（Gopeed 回 HTTP 401，`code=1001 msg=unauthorized`）。�
    下载本身继续在 Gopeed 里进行，`gopeed_status` 仍能看到。没有持久化、也没有「重新接管」——那需要可持久化的
    job 后端，超出本插件的范围。插件重载至少会如实报告：每个还活着的跟踪器 settle 成 `killed`，detail 写明
    下载状态未知。
+10. **只读工具仍可能被自己的超时掐断。** `gopeed_list` / `gopeed_status` / `gopeed_control`（工具超时 25 秒）
+    和 `gopeed_process`（30 秒）仍然无条件调用端口探测、没有内部时间预算，所以 Gopeed 冷启动时它们同样可能
+    撞上 DSH 的工具超时，调用被直接掐断、连一句解释都返回不了。0.3.1 只给写操作 `gopeed_add` 加了预算
+    （被掐断的写操作会留下一次没人认领的下载，代价更高）；只读工具失败重试很便宜，留到后续版本。
 
 ---
 

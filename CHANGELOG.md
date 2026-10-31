@@ -9,69 +9,46 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
 
 ## [0.3.1] - unreleased
 
-### Changed
+### Fixed
 
-- **A failed call now says what a wrong token means.** Gopeed answers `code=1001 msg=unauthorized`, which
-  names neither the cause nor the fix, so a `gopeed_add` against a mis-set token produced one opaque line.
-  `GopeedApiError` now appends "-- the token is wrong; set it in the plugin settings (gopeed_process explains
-  it)" for 401, 403, 1001 and for any message that mentions unauthorized or forbidden. Task-gone (1000) and
-  transport failures (-1) are untouched, because their wording is already actionable.
-- **A wrong token was reported as a generic error instead of as a wrong token.** Gopeed 1.9.3 answers HTTP
-  401 when the token is wrong; the probe only treated 403 as `unauthorized` and let 401 fall through to
-  `error`. That broke two things: `gopeed_process` could not reach its `unauthorized` verdict, so the advice
-  pointed at the port rather than the token, and `discoverApiPort` -- which deliberately keeps a port whose
-  probe says `unauthorized`, because that proves a Gopeed is listening there -- gave up on the one port that
-  was actually right. Both status codes now map to `unauthorized`.
-- **Five user-facing string sites still said "API".** The project keeps that word out of anything a person or a
-  model reads, but the task-error envelope still said `Gopeed API /api/v1/tasks returned ...`, the "port unknown"
-  error said `the API port is unknown`, the `apiLatencyMs` and `apiDetail` output-schema descriptions said "API
-  latency" and "API probe", and one diagnosis line in `gopeed_process` said `the verdict relies on the API`. They
-  now say `Gopeed <route> returned ...`, "listen port", "Endpoint latency" / "Endpoint probe" and "HTTP probe".
-  Found by a blind test that only saw the tool definitions and the resulting error text.
-- **`gopeed_add.path` says what happens when it is omitted.** The parameter description was `Save dir`,
-  which named the unit but not the consequence: a model reading only the tool definition had no way to know
-  that leaving `path` out uses the configured save location, or that passing it wins over that setting. It is
-  now `Save dir (omit = use the configured location)` (+37 characters). This matters because the tool
-  definition is usually the only thing an agent reads -- the full precedence order lives in
-  `docs/AGENTS.md`, which a model calling the tool does not necessarily open. Its sibling `name` gained
-  `File name (optional)` for the same reason (+37 characters), so a model reading only the schema knows a
-  file name is optional and that omitting it is safe.
-- **The README states which link types work.** Direct HTTP/HTTPS links, magnet links and remote `.torrent`
-  URLs all work; a local `.torrent` file does not, because the plugin has no upload path -- pass the URL it
-  came from. BitTorrent detail (peers, DHT, trackers, seeding) stays with Gopeed, which is worth saying because
-  "downloader" otherwise suggests the plugin manages the transfer itself.
-- **The documentation is split in two, and the README is a landing page again.** `README.md` keeps the
-  first screen -- what the plugin is, what it cannot do, installation, the settings defaults and the numbered
-  known limitations -- and folds the design argument, the prompt-footprint measurement, the implementation
-  notes and the development instructions into `<details>` blocks, so the repository page can be skimmed at a
-  glance instead of at 500 lines. The agent-facing material moved to a new **`docs/AGENTS.md`**: the tool table with
-  the result fields DSH validates, the do-not-poll rule, the save-location order, an error playbook and an
-  explicit do-not list. `README.md` points at it in a notice at the top rather than repeating it, and
-  It deliberately stays in `docs/` and out of the published `files`, because it is written for a model reading the repository, not for the installed plugin; `README.md` links to it on GitHub. No behaviour, no tool definition and no prompt character
-  changed.
-- **The settings form now states every default and what an empty field means.** Each hint leads with the real
-  default from the `Config` schema: save location `Workspace`, host `127.0.0.1` (and required), port `0` =
-  auto-detect, token empty = nothing sent, executable path empty = auto-detect, webhook port `0` = system-assigned.
-  The custom path field gained a permanent hint plus an `Empty = Gopeed default directory` placeholder, because
-  emptying it used to save fine and then quietly download into Gopeed's own directory. The port fields also say
-  that an empty box is rejected on save, so auto-detect means typing `0`, not clearing the field; the token hint
-  says empty keeps the stored token unchanged. Both dictionaries changed together.
-- **The webhook auto mode says "save", not "write".** "Write" was not understood as an action a user takes, so
-  every user-facing string about the automatic webhook configuration now says "save" (the Chinese strings use
-  the equivalent verb): the mode hint, the
-  drawer note, the restart warning, the runtime messages (`nothing was saved`, `Saving Gopeed config failed`) and
-  the same wording in both READMEs. Nothing about the mechanism changed -- the plugin still PUTs the address into
-  Gopeed's configuration and Gopeed still applies it only on a full restart.
-- **`gopeed_events` reads better.** `Events; apply saves webhook config.` became
-  `Events; action=apply saves the webhook config.` (+10 characters), naming the parameter value so the sentence
-  parses.
-- **`gopeed_add` says the job runs in the background.** Its description is now
-  `Download a URL through Gopeed. Returns a background job that notifies when it ends.` (+29 characters), and the
-  output note says the job *runs in the background*, to *not poll and not wait*, and to read the result *after
-  the notice* -- the previous "Read it with job_output" read like an instruction to block on it.
-- **Prompt footprint re-measured: 1339 to 1452 characters** (+113: the two descriptions above, plus 37 for the save-directory hint and 37 for the file-name hint). The 0.3.0 figure
-  previously recorded as 1343 was 4 characters high because `gopeed_process` measured 114 instead
-  of its real 110; every baseline is now taken from a fresh measurement of the loaded tools.
+- **The `workspace` download target saved into the directory the session was created in.** The target read
+  `session.header.cwd`, which is the persisted creation-time directory and never moves, so after a
+  `working_directory` call had moved the session (`cd`) the download still landed in the old project. It now
+  asks the `workingDirectory` service for its running projection first (`Service.get(session)`: synchronous,
+  folds the in-memory session log, no filesystem I/O) and falls back to `header.cwd` only when the host composes
+  no such service. Measured in one session: `header.cwd` was `D:\Workspace` while the
+  `working-directory/change` event had already moved the session to `D:\Workspace\dsh-plugin-gopeed`, and
+  the POST body's `opts.path` carries the second one after the fix. This is also the directory the
+  `working_directory` tool reports and the one the filesystem tools resolve relative paths against.
+- **A wrong token made `gopeed_launch` and the settings-page restart wait out the whole readiness budget.**
+  The re-probe loop treated `unauthorized` as transient and checked its 15-second deadline only *after* a full
+  detect-and-probe round, so a token that can never become right burned the budget and then produced a
+  timeout-shaped failure. `unauthorized` is now terminal -- a 401 already proved something is listening there
+  -- the deadline is checked before each round, and `waitForApi` in `lib/api.js` treats it as terminal too.
+  Both call sites only branch on `ok`, so no contract changed. Measured on the same host: `gopeed_launch`
+  17,621 ms / 6 rounds / 30 probes became 210-2,337 ms / 1 round / 2-5 probes, and a single `waitForApi`
+  2,136 ms became 24 ms. The successful path did not regress (175 ms against 189 ms). The failure text no
+  longer hardcodes "within 15s" and reports what actually happened: `last state: unauthorized after 210ms`.
+- **`gopeed_add` could be killed by its own DSH tool timeout before it could explain anything.** The port
+  probe had no bound of its own (about 32 seconds at worst: 4 s `tasklist`, 8 s `Get-Process`, 8 s
+  `netstat`, 12 s `Get-NetTCPConnection`, plus up to 3 s per probed port), and the create request and its
+  read-back were each allowed `Config.timeoutMs` (20,000 by default, 120,000 at the cap) -- far past the
+  25-second tool timeout, at which point DSH ends the call and the tool never returns a result at all. The
+  whole path now runs inside one 22.5-second internal budget derived from that timeout: the port phase gets a
+  hard 12 seconds, the create request gets what is left minus a 3-second reserve, and the read-back gets the
+  remainder. Per-call request timeouts come from a separate client instance, so one call's squeeze cannot
+  affect another tool, and they only ever shorten the configured value, never extend it. Worst case is now
+  22.5 seconds, under the 25-second tool timeout. Verified against a local TCP black hole with
+  `Config.timeoutMs` at 120,000: the old code ran the full 120 seconds, the fixed one fails cleanly at
+  21.0 seconds with a message that says what was submitted and what was not.
+
+### Known limitations
+
+- **The read-only tools still have an unbounded port phase behind the same tool timeout.** `gopeed_list`,
+  `gopeed_status` and `gopeed_control` (25,000 ms) and `gopeed_process` (30,000 ms) still call
+  `ensureApiPort()` unconditionally, so a cold Gopeed can trip the DSH tool timeout there too and end the call
+  with no explanation. Only the write path (`gopeed_add`) got a budget this round, because a killed write
+  risks an unaccounted download; a failed read is cheap to retry, so the same treatment is deferred.
 
 ## [0.3.0] - 2026-10-31
 
@@ -137,6 +114,45 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
 - **Version badges report 0.3.0.** The browser bundle constant and the packaged `version` moved together, so the
   settings-page badge still matches `gopeed_process.pluginVersion` and does not tell users to restart DSH for no
   reason.
+- **A failed call now says what a wrong token means.** Gopeed answers `code=1001 msg=unauthorized`, which
+  names neither the cause nor the fix, so a `gopeed_add` against a mis-set token produced one opaque line.
+  `GopeedApiError` now appends "-- the token is wrong; set it in the plugin settings (gopeed_process explains
+  it)" for 401, 403, 1001 and for any message that mentions unauthorized or forbidden. Task-gone (1000) and
+  transport failures (-1) are untouched, because their wording is already actionable.
+- **Five user-facing string sites still said "API".** The project keeps that word out of anything a person or a
+  model reads, but the task-error envelope still said `Gopeed API /api/v1/tasks returned ...`, the "port unknown"
+  error said `the API port is unknown`, the `apiLatencyMs` and `apiDetail` output-schema descriptions said "API
+  latency" and "API probe", and one diagnosis line in `gopeed_process` said `the verdict relies on the API`. They
+  now say `Gopeed <route> returned ...`, "listen port", "Endpoint latency" / "Endpoint probe" and "HTTP probe".
+  Found by a blind test that only saw the tool definitions and the resulting error text.
+- **`gopeed_add.path` says what happens when it is omitted.** The parameter description was `Save dir`,
+  which named the unit but not the consequence: a model reading only the tool definition had no way to know
+  that leaving `path` out uses the configured save location, or that passing it wins over that setting. It is
+  now `Save dir (omit = use the configured location)` (+37 characters). This matters because the tool
+  definition is usually the only thing an agent reads -- the full precedence order lives in
+  `docs/AGENTS.md`, which a model calling the tool does not necessarily open. Its sibling `name` gained
+  `File name (optional)` for the same reason (+37 characters), so a model reading only the schema knows a
+  file name is optional and that omitting it is safe.
+- **The settings form now states every default and what an empty field means.** Each hint leads with the real
+  default from the `Config` schema: save location `Workspace`, host `127.0.0.1` (and required), port `0` =
+  auto-detect, token empty = nothing sent, executable path empty = auto-detect, webhook port `0` = system-assigned.
+  The custom path field gained a permanent hint plus an `Empty = Gopeed default directory` placeholder, because
+  emptying it used to save fine and then quietly download into Gopeed's own directory. The port fields also say
+  that an empty box is rejected on save, so auto-detect means typing `0`, not clearing the field; the token hint
+  says empty keeps the stored token unchanged. Both dictionaries changed together.
+- **The webhook auto mode says "save", not "write".** "Write" was not understood as an action a user takes, so
+  every user-facing string about the automatic webhook configuration now says "save" (the Chinese strings use
+  the equivalent verb): the mode hint, the
+  drawer note, the restart warning, the runtime messages (`nothing was saved`, `Saving Gopeed config failed`) and
+  the same wording in both READMEs. Nothing about the mechanism changed -- the plugin still PUTs the address into
+  Gopeed's configuration and Gopeed still applies it only on a full restart.
+- **`gopeed_events` reads better.** `Events; apply saves webhook config.` became
+  `Events; action=apply saves the webhook config.` (+10 characters), naming the parameter value so the sentence
+  parses.
+- **`gopeed_add` says the job runs in the background.** Its description is now
+  `Download a URL through Gopeed. Returns a background job that notifies when it ends.` (+29 characters), and the
+  output note says the job *runs in the background*, to *not poll and not wait*, and to read the result *after
+  the notice* -- the previous "Read it with job_output" read like an instruction to block on it.
 
 ### Fixed
 
@@ -175,6 +191,12 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
   back to discovery.
 - **`Launch failed: launch failed: ...`** -- the producer's message carried its own prefix on top of the
   caller's. The prefix now lives in one place.
+- **A wrong token was reported as a generic error instead of as a wrong token.** Gopeed 1.9.3 answers HTTP
+  401 when the token is wrong; the probe only treated 403 as `unauthorized` and let 401 fall through to
+  `error`. That broke two things: `gopeed_process` could not reach its `unauthorized` verdict, so the advice
+  pointed at the port rather than the token, and `discoverApiPort` -- which deliberately keeps a port whose
+  probe says `unauthorized`, because that proves a Gopeed is listening there -- gave up on the one port that
+  was actually right. Both status codes now map to `unauthorized`.
 
 ### Documentation
 
@@ -192,6 +214,24 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
   schema but the custom settings form does not render controls for them; the docs earlier implied they were on
   the page. They are now marked config-only, with `cordis.patch.yml` (`id: gopeed`) named as where to set them.
   This was a documentation bug, not a code change.
+- **The README states which link types work.** Direct HTTP/HTTPS links, magnet links and remote `.torrent`
+  URLs all work; a local `.torrent` file does not, because the plugin has no upload path -- pass the URL it
+  came from. BitTorrent detail (peers, DHT, trackers, seeding) stays with Gopeed, which is worth saying because
+  "downloader" otherwise suggests the plugin manages the transfer itself.
+- **The documentation is split in two, and the README is a landing page again.** `README.md` keeps the first
+  screen -- what the plugin is, what it cannot do, installation, the settings defaults and the numbered
+  known limitations -- and folds the design argument, the prompt-footprint measurement, the implementation
+  notes and the development instructions into `<details>` blocks, so the repository page can be skimmed at a
+  glance instead of at 500 lines. The agent-facing material moved to a new **`docs/AGENTS.md`**: the tool
+  table with the result fields DSH validates, the do-not-poll rule, the save-location order, an error
+  playbook and an explicit do-not list. `README.md` points at it in a notice at the top rather than
+  repeating it. It deliberately stays in `docs/` and out of the published `files`, because it is written for
+  a model reading the repository, not for the installed plugin; `README.md` links to it on GitHub. No
+  behaviour, no tool definition and no prompt character changed.
+- **Prompt footprint re-measured: 1339 to 1452 characters** (+113: the two descriptions above, plus 37 for
+  the save-directory hint and 37 for the file-name hint). The figure previously recorded in this entry as
+  1343 was 4 characters high because `gopeed_process` measured 114 instead of its real 110; every baseline
+  is now taken from a fresh measurement of the loaded tools.
 
 ## [0.2.1] - 2026-10-31
 

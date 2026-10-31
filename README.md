@@ -111,8 +111,8 @@ dependency, and source edits then need the extra step described in the developme
 The form on **Plugins -> Installed -> Gopeed Downloader -> Configure** is *volatile*: saving applies
 immediately, with no plugin remount and no DSH restart. Every field's hint reads `Default: X; empty = Y`.
 
-- **`downloadTarget`** -- `workspace` (default) / `gopeed` / `custom`. An explicit `path` argument to
-  `gopeed_add` always wins.
+- **`downloadTarget`** -- `workspace` (default) / `gopeed` / `custom`. `workspace` saves into the session's
+  current working directory, which follows a `cd`. An explicit `path` argument to `gopeed_add` always wins.
 - **`customDownloadPath`** -- used when the target is `custom`. **Empty = Gopeed's own download directory**,
   and the fallback is reported in `jobNote`, never silent.
 - **`host`** -- default `127.0.0.1`, **required**. IP or hostname only; `http://...` or `host:port` is
@@ -177,6 +177,11 @@ diagnosis unreachable.
    DSH (or upgrading the plugin) drops every tracker; the downloads themselves continue inside Gopeed and stay
    visible to `gopeed_status`. There is no persistence and no re-attach. A plugin reload at least reports the
    loss: each live tracker settles as `killed` with a detail saying the download state is unknown.
+10. **Read-only tools can still be cut off by their own timeout.** `gopeed_list`, `gopeed_status` and
+    `gopeed_control` (25 s) and `gopeed_process` (30 s) still probe for the listen port without an internal
+    bound, so a cold Gopeed can trip the DSH tool timeout and end the call with no message. `gopeed_add` got a
+    budget in 0.3.1 because a killed write risks an unaccounted download; a failed read is cheap to retry, so
+    the same treatment is deferred.
 
 ## Going deeper
 
@@ -186,9 +191,13 @@ diagnosis unreachable.
 Save location is decided in this order, first match wins:
 
 1. an explicit `path` argument to `gopeed_add`;
-2. the calling session's workspace directory, when `downloadTarget` is `workspace` (the default);
+2. the session's **current working directory**, when `downloadTarget` is `workspace` (the default);
 3. `customDownloadPath`, when `downloadTarget` is `custom` and the field is not empty;
 4. otherwise the path is left unset and **Gopeed** uses the download directory from its own settings.
+
+**"Workspace" means the live directory, not the one the session started in.** It is the directory the
+`working_directory` tool reports, so it follows a `cd`; the creation-time directory is only the fallback for a
+host that exposes no such projection. That keeps a download next to the files the agent is actually working on.
 
 The fallbacks are reported, never silent: an unresolvable workspace or a `custom` target with an empty path
 still downloads into Gopeed's directory, and `jobNote` says which fallback happened. `gopeed_add` also reads
@@ -379,7 +388,7 @@ entirely, because the jobs live inside the DSH process; the downloads keep runni
 
 DSH projects every tool's `{name, description, parameters}` into the system prompt on every turn
 (`output.schema` and `render` do not), so that text is a permanent cost. Measured on the current working tree
-(unreleased), nine historical entry points having become seven tools:
+(0.3.1, unchanged since 0.3.0), nine historical entry points having become seven tools:
 
 | Tool (before) | Characters | Tool (after) | Characters |
 |---|---:|---|---:|
