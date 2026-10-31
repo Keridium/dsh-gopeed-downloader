@@ -430,7 +430,7 @@ window.__ModuleLoader__.load({
      * showing this constant lets the user compare it with the pluginVersion
      * reported by gopeed_process and restart DSH when they differ.
      */
-    const CLIENT_VERSION = '0.3.0'
+    const CLIENT_VERSION = '0.3.1'
 
     /** One line of small inline hint text. */
     function note(style, text) {
