@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
       host: '地址',
       hostHint: 'Gopeed 设置 → 高级 → 协议（TCP）里的监听地址，一般就是 127.0.0.1。',
       port: '端口',
-      portHint: '默认 9999，与 Gopeed 里配置的端口保持一致。',
+      portHint: '默认 0：由插件自动检测正在运行的 Gopeed 占用的端口；如果在 Gopeed 里固定了端口，这里就填同一个数字（例如 9999）。',
       token: 'Token',
       tokenHint: 'Gopeed 设置 → 高级 → Token，插件会把它放在 X-Api-Token 请求头里。',
       exe: '程序路径（可选）',
@@ -51,7 +51,7 @@ window.__ModuleLoader__.load({
       rejected: 'DSH 拒绝了这次写入，请刷新页面后重试。',
       failed: '保存失败',
       hostRequired: '地址不能为空。',
-      portInvalid: '端口必须是 1–65535 之间的整数。',
+      portInvalid: '端口必须是 0–65535 之间的整数（0 = 自动检测）。',
       loading: '正在读取配置…',
       unavailable: '配置表单当前不可用（Host 没有暴露这个插件的设置）。',
       verify: '保存后可以让 agent 调用 gopeed_process 确认连通性。',
@@ -61,11 +61,11 @@ window.__ModuleLoader__.load({
       summary: 'Gopeed downloader: add / list / status / pause / resume / remove, with editable host and token.',
       title: 'Connection',
       host: 'Host',
-      hostHint: 'The listen address from Gopeed → Settings → Advanced → Protocol (TCP); usually 127.0.0.1.',
+      hostHint: 'The listen address from Gopeed -> Settings -> Advanced -> Protocol (TCP); usually 127.0.0.1.',
       port: 'Port',
-      portHint: 'Defaults to 9999; must match Gopeed.',
+      portHint: 'Defaults to 0: the plugin auto-detects the port the running Gopeed holds. Enter the same fixed number you pinned in Gopeed (for example 9999) only if you pinned one.',
       token: 'Token',
-      tokenHint: 'Gopeed → Settings → Advanced → Token, sent as the X-Api-Token header.',
+      tokenHint: 'Gopeed -> Settings -> Advanced -> Token, sent as the X-Api-Token header.',
       exe: 'Executable (optional)',
       exeHint: 'Leave blank: the plugin tries the default Gopeed install path first, then the running process, the registry, Start Menu/Desktop shortcuts, and common paths. Fill it only for portable or unusual installs.',
       exePlaceholder: 'Blank = auto-detect (recommended)',
@@ -73,14 +73,14 @@ window.__ModuleLoader__.load({
       tokenUnset: 'Not set',
       base: 'Request base URL',
       save: 'Save',
-      saving: 'Saving…',
+      saving: 'Saving...',
       saved: 'Saved. Volatile fields apply immediately, no restart needed.',
       noChanges: 'No changes.',
       rejected: 'The host rejected this write; refresh the page and try again.',
       failed: 'Save failed',
       hostRequired: 'Host must not be empty.',
-      portInvalid: 'Port must be an integer between 1 and 65535.',
-      loading: 'Reading configuration…',
+      portInvalid: 'Port must be an integer between 0 and 65535 (0 = auto-detect).',
+      loading: 'Reading configuration...',
       unavailable: 'The configuration form is unavailable: the host exposes no settings for this plugin.',
       verify: 'After saving, ask the agent to call gopeed_process to verify connectivity.',
     }
@@ -120,6 +120,19 @@ window.__ModuleLoader__.load({
       muted: { opacity: 0.62, fontSize: '12.5px', lineHeight: 1.6, margin: 0 },
     }
 
+    /**
+     * Class applied only to the port input. Pseudo-elements such as
+     * ::-webkit-inner-spin-button cannot be targeted from an inline style
+     * object, so the rule is injected as a stylesheet instead. The input
+     * keeps type="number" (numeric keypad and browser validation still
+     * work); only the native spinner is hidden.
+     */
+    const PORT_CLASS = 'dsh-gopeed-num'
+    const PORT_CSS =
+      '.dsh-gopeed-num::-webkit-outer-spin-button,' +
+      '.dsh-gopeed-num::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}' +
+      '.dsh-gopeed-num{-moz-appearance:textfield;}'
+
     /** One line of small inline hint text. */
     function note(style, text) {
       return h('p', { style }, text)
@@ -141,7 +154,7 @@ window.__ModuleLoader__.load({
         }) || typeof value.token === 'string'
 
       const [host, setHost] = React.useState(typeof value.host === 'string' ? value.host : '127.0.0.1')
-      const [port, setPort] = React.useState(value.port === undefined || value.port === null ? '9999' : String(value.port))
+      const [port, setPort] = React.useState(value.port === undefined || value.port === null ? '0' : String(value.port))
       const [token, setToken] = React.useState('')
       const [exePath, setExePath] = React.useState(
         typeof value.exePath === 'string' ? value.exePath : '',
@@ -162,13 +175,13 @@ window.__ModuleLoader__.load({
         }
         const portText = port.trim()
         const portNumber = Number(portText)
-        if (portText === '' || !Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535) {
+        if (portText === '' || !Number.isInteger(portNumber) || portNumber < 0 || portNumber > 65535) {
           setError(t('portInvalid'))
           return
         }
         const ops = []
         if (nextHost !== String(value.host ?? '')) ops.push({ op: 'set', path: ['host'], value: nextHost })
-        if (portNumber !== Number(value.port ?? 9999)) ops.push({ op: 'set', path: ['port'], value: portNumber })
+        if (portNumber !== Number(value.port ?? 0)) ops.push({ op: 'set', path: ['port'], value: portNumber })
         const nextToken = token.trim()
         if (nextToken.length > 0) ops.push({ op: 'set', path: ['token'], value: nextToken })
         const nextExe = exePath.trim()
@@ -187,7 +200,7 @@ window.__ModuleLoader__.load({
             setError(t('rejected'))
           }
         } catch (failure) {
-          setError(`${t('failed')}：${failure && failure.message ? failure.message : String(failure)}`)
+          setError(`${t('failed')}: ${failure && failure.message ? failure.message : String(failure)}`)
         } finally {
           setBusy(false)
         }
@@ -196,6 +209,7 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         { style: styles.wrap },
+        h('style', { key: 'dsh-gopeed-port-css' }, PORT_CSS),
         h(
           'div',
           { style: styles.head },
@@ -223,11 +237,17 @@ window.__ModuleLoader__.load({
           h('label', { style: styles.label, htmlFor: 'dsh-gopeed-port' }, t('port')),
           h('input', {
             id: 'dsh-gopeed-port',
+            className: PORT_CLASS,
             style: styles.input,
-            type: 'number',
-            min: 1,
-            max: 65535,
-            step: 1,
+            // Deliberately a text input with a numeric keyboard hint instead of type="number":
+            // type="number" always grows a native up/down spinner, which cannot be removed with
+            // inline styles (it is a ::-webkit-inner-spin-button pseudo-element, see PORT_CSS)
+            // and still renders in the dark theme on some builds. A text input has no spinner to
+            // begin with, and `inputMode` keeps the numeric keypad on mobile. Validation happens
+            // in save() anyway.
+            type: 'text',
+            inputMode: 'numeric',
+            autoComplete: 'off',
             value: port,
             disabled: busy || state.writable === false,
             onChange: (event) => setPort(event.target.value),
