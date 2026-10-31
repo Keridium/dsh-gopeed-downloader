@@ -1826,7 +1826,7 @@ export function apply(ctx, config) {
     // already pin the value down - except `path`, where "save directory" versus "file path" is a
     // silent, wrong-download kind of mistake.
     //
-    // Budget note: the seven tool definitions total 1378 characters, 278 over the original 1100
+    // Budget note: the seven tool definitions total 1415 characters, 315 over the original 1100
     // target. `name` and the value enums were restored deliberately - a shorter schema that hides
     // a real parameter or a legal value costs more in wrong calls than the characters save. See
     // the footprint section of README.md for the measured per-tool breakdown.
@@ -1835,7 +1835,7 @@ export function apply(ctx, config) {
       required: ['url'],
       properties: {
         url: { type: 'string' },
-        path: { type: 'string', description: 'Save dir' },
+        path: { type: 'string', description: 'Save dir (omit = use the configured location)' },
         name: { type: 'string' },
       },
     },
@@ -1844,7 +1844,7 @@ export function apply(ctx, config) {
         type: 'object',
         additionalProperties: false,
         // jobId / jobNote describe the optional background tracking job. They live in output.schema
-        // only, which is never projected into the system prompt, so the 1378-character tool
+        // only, which is never projected into the system prompt, so the 1415-character tool
         // definition budget is untouched (parameters are unchanged).
         required: ['taskId', 'url', 'name', 'path', 'baseUrl', 'jobId', 'jobNote'],
         properties: {
@@ -2156,8 +2156,8 @@ export function apply(ctx, config) {
             enum: ['ok', 'refused', 'timeout', 'unauthorized', 'error'],
             description: 'HTTP probe result.',
           },
-          apiLatencyMs: { type: 'integer', description: 'API latency in ms.' },
-          apiDetail: { type: 'string', description: 'API probe detail.' },
+          apiLatencyMs: { type: 'integer', description: 'Endpoint latency in ms.' },
+          apiDetail: { type: 'string', description: 'Endpoint probe detail.' },
           version: { type: 'string', description: 'Gopeed version; empty when unreachable.' },
           os: { type: 'string', description: 'Host OS reported by Gopeed.' },
           arch: { type: 'string', description: 'Host architecture reported by Gopeed.' },
@@ -2224,7 +2224,7 @@ export function apply(ctx, config) {
         } else {
           lines.push(
             'Process: this host cannot enumerate processes, so "no process found" is unknown rather than ' +
-              'evidence; the verdict relies on the API',
+              'evidence; the verdict relies on the HTTP probe',
           )
         }
         lines.push(

@@ -11,6 +11,16 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
 
 ### Changed
 
+- **Two user-facing strings still said "API".** The project keeps that word out of anything a person or a model
+  reads, but the "port unknown" error still said `the API port is unknown` and one diagnosis line in
+  `gopeed_process` said `the verdict relies on the API`. They now say "listen port" and "HTTP probe". Found by
+  a blind test that only saw the tool definitions and the resulting error text.
+- **`gopeed_add.path` says what happens when it is omitted.** The parameter description was `Save dir`,
+  which named the unit but not the consequence: a model reading only the tool definition had no way to know
+  that leaving `path` out uses the configured save location, or that passing it wins over that setting. It is
+  now `Save dir (omit = use the configured location)` (+37 characters). This matters because the tool
+  definition is usually the only thing an agent reads -- the full precedence order lives in
+  `docs/AGENTS.md`, which a model calling the tool does not necessarily open.
 - **The README states which link types work.** Direct HTTP/HTTPS links, magnet links and remote `.torrent`
   URLs all work; a local `.torrent` file does not, because the plugin has no upload path -- pass the URL it
   came from. BitTorrent detail (peers, DHT, trackers, seeding) stays with Gopeed, which is worth saying because
@@ -44,7 +54,7 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
   `Download a URL through Gopeed. Returns a background job that notifies when it ends.` (+29 characters), and the
   output note says the job *runs in the background*, to *not poll and not wait*, and to read the result *after
   the notice* -- the previous "Read it with job_output" read like an instruction to block on it.
-- **Prompt footprint re-measured: 1339 to 1378 characters** (+39, the two descriptions above). The 0.3.0 figure
+- **Prompt footprint re-measured: 1339 to 1415 characters** (+76: the two descriptions above plus 37 for the save-directory parameter hint). The 0.3.0 figure
   previously recorded as 1343 was 4 characters high because `gopeed_process` measured 114 instead
   of its real 110; every baseline is now taken from a fresh measurement of the loaded tools.
 

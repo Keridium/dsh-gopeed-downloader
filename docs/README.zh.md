@@ -17,7 +17,7 @@ REST 类工具跨平台，进程控制仅支持 Windows。
 - **7 个工具**：`gopeed_add` / `gopeed_list` / `gopeed_status` / **`gopeed_control`**（暂停/继续/删除）/
   **`gopeed_process`**（进程 + API 诊断 + 版本 + Webhook 状态）/ **`gopeed_launch`**（只在没跑时启动）/
   **`gopeed_events`**（读下载完成事件；auto 模式下可保存 Webhook 配置）
-- **进 system prompt 的常驻开销只有 1378 字符**（约 344 token，按 4 字符/token 粗略折算）：7 个工具的「名字 + 一段英文短语描述 + 极简参数」；
+- **进 system prompt 的常驻开销只有 1415 字符**（约 354 token，按 4 字符/token 粗略折算）：7 个工具的「名字 + 一段英文短语描述 + 极简参数」；
   工具返回的正文同样是英文（工具输出也属于 agent 可见内容）。合并与精简过程见「七、实测记录」
 - **下载保存位置可选，不是藏起来的默认值**：`downloadTarget` 三选一——`workspace`（默认，当前会话的工作区目录）/
   `gopeed`（交给 Gopeed 自己的下载目录）/ `custom`（用 `customDownloadPath`）。agent 显式传 `path` 时永远以它为准。
@@ -418,34 +418,34 @@ gopeed_launch  -> alreadyRunning=true, launched=false
   开始下载约 4 MB/s、跟踪 job 能正常跟上结束。没有 peers 的磁力、只靠 DHT、私有 tracker、重启后继续
   磁力任务这些更难的场景仍未验证。
 
-### 工具常驻开销：2714 → 1378 字符（约 679 → 344 token，按 4 字符/token 粗略折算）
+### 工具常驻开销：2714 → 1415 字符（约 679 → 354 token，按 4 字符/token 粗略折算）
 
 DSH 每轮都会把每个工具的 `{name, description, parameters}` 投影进 system prompt（`output.schema`
 和 render 不进），所以这部分是纯常驻成本。9 个历史入口收敛成 7 个工具后（当前工作树实测，未发布）：
 
 | 工具（合并前） | 字符 | 工具（现在） | 字符 |
 |---|---:|---|---:|
-| `gopeed_add` | 508 | `gopeed_add` | 285 |
+| `gopeed_add` | 508 | `gopeed_add` | 322 |
 | `gopeed_list` | 311 | `gopeed_list` | 191 |
 | `gopeed_status` | 232 | `gopeed_status` | 155 |
 | `gopeed_pause` + `gopeed_resume` + `gopeed_remove` | 728 | `gopeed_control`（合并） | 268 |
 | `gopeed_info` + `gopeed_process` | 581 | `gopeed_process`（合并） | 110 |
 | `gopeed_launch` | 354 | `gopeed_launch` | 134 |
 | — | — | `gopeed_events`（新增） | 235 |
-| **合计 9 个工具** | **2714** | **合计 7 个工具** | **1378（−49%）** |
+| **合计 9 个工具** | **2714** | **合计 7 个工具** | **1415（−48%）** |
 
 做法：`pause/resume/remove` 合并成一个带 `action` 枚举的 `gopeed_control`，`info` 并入 `gopeed_process`，
 `gopeed_launch` 去掉 `restart` 参数，描述压成不重复 `gopeed_` 前缀的短语，参数描述只保留 `path`
 （否则容易把「目录」误传成「文件路径」），参数 schema 不写 `additionalProperties:false`
 （与 DSH 原生 `defineTool` 产出的形状一致，校验改在 `execute` 里做）。唯一不能靠参数名表达的语义
 ——`force` 会连文件一起删——写在 `gopeed_control` 的描述里。名字、`required` 数组、枚举值这些 schema 骨架刻意没动：
-那才是 DSH 校验的东西，再压就只能删参数。**下载能力没有删减**。实测合计 **1378 字符，比最早的 1100 目标多 278**：
-其中 `gopeed_events` 净增 117（235 减去其余六个工具原本比 1100 目标少的 118），0.3.0 重写五条描述又加了 122（早期误记为 126，重新实测后修正），后续的背景任务措辞修订又加了 39，117 + 122 + 39 = 278。其余取舍是刻意的——保留 `name` 参数、两个枚举和
+那才是 DSH 校验的东西，再压就只能删参数。**下载能力没有删减**。实测合计 **1415 字符，比最早的 1100 目标多 315**：
+其中 `gopeed_events` 净增 117（235 减去其余六个工具原本比 1100 目标少的 118），0.3.0 重写五条描述又加了 122（早期误记为 126，重新实测后修正），后续的背景任务措辞修订又加了 39，保存目录参数的说明又加了 37，117 + 122 + 39 + 37 = 315。其余取舍是刻意的——保留 `name` 参数、两个枚举和
 `required` 数组，因为把真实存在的参数或合法取值藏起来，比这些字符省下的代价更大（模型会传错）。
 上表左列的 `gopeed_pause` / `gopeed_resume` / `gopeed_remove` / `gopeed_info` 是历史工具名，现在已不存在。
 
 0.3.0 的「下载完成自动唤醒」**本身没有增加常驻开销**：`gopeed_add` 只在 `output.schema` 里多了 `jobId` / `jobNote`，
-而 `output.schema` 不进 system prompt；`parameters` 一个字没动。真正让总数从 **1217 涨到 1339** 的是另一项 0.3.0 改动（后续措辞修订又加到 1378）：
+而 `output.schema` 不进 system prompt；`parameters` 一个字没动。真正让总数从 **1217 涨到 1339** 的是另一项 0.3.0 改动（后续措辞修订又加到 1415）：
 `gopeed_add` / `gopeed_list` / `gopeed_status` / `gopeed_process` / `gopeed_launch` 五条描述从原来的极短片段
 （如 `Create task.`）改成了说清「能做什么 + 边界」的一句话，合计 +122 字符。保存路径、host 校验、启动重探测和
 toast 开关都没有新增 prompt 文本。
