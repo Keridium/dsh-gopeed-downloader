@@ -68,7 +68,7 @@ dsh-gopeed/
 | `customDownloadPath` | string | **空** | `downloadTarget` 为 `custom` 时使用的绝对目录，首尾空白会被裁掉。默认空，为空时回落到 Gopeed 自己的目录（配置页在输入框下方常驻说明这一点，placeholder 也写「留空 = Gopeed 默认目录」）；其它 target 下忽略 |
 | `host` | string | `127.0.0.1` | Gopeed 监听地址（Gopeed 设置 → 高级 → 协议（TCP）里的那个地址）。**只填 IP 或主机名**：粘成 `http://…` 或 `127.0.0.1:9999` 会被当场拒绝；裸 IPv6 要写成方括号形式 `[::1]` |
 | `port` | number | `0` | `0` = 自动检测：向 Windows 问出正在运行的 Gopeed 实际占用的端口。填数字才是钉死，且要先去 Gopeed 里把端口改成同一个数（Gopeed 新装是端口 `0`，每次启动随机，所以它没有「默认端口」） |
-| `token` | string | **空** | Gopeed 的 API Token。Gopeed 出厂为空（不鉴权），所以默认留空；你在 Gopeed 里设了什么，这里就填一模一样的 |
+| `token` | string | **空** | Gopeed 的 API Token。Gopeed 出厂为空（不鉴权），所以默认留空；你在 Gopeed 里设了什么，这里就填一模一样的。**填错会明确报 `unauthorized`**（Gopeed 回 HTTP 401），不会说成连不上；端口自动检测也会保留它已经找到的那个端口，因此只需要改 Token |
 | `timeoutMs` | number | `20000` | 单次 HTTP 请求超时（毫秒）。**配置页不渲染**，改 profile 的 `cordis.patch.yml` |
 | `exePath` | string | **空** | 可执行文件路径。**一般不用填**：留空时先找 Gopeed 默认安装路径，找不到再自动发现（见「六」）；只有绿色版/非标准安装才需要手填。必须指向真正的 `.exe` 文件，填目录或 `.ini` 之类会被拒绝并回落到自动发现 |
 | `portScan` | boolean | `false` | **配置页不渲染这个开关**。默认关闭；在 profile 配置里打开后，允许插件扫本机动态端口范围来定位 Gopeed（Windows 不肯透露别的进程的端口时用得上）。会碰到无关软件的端口，属于有侵入性的可选项，接受才开 |
@@ -332,7 +332,7 @@ download NOT cancelled」结束——`failed` 只留给 API 连不上或 Gopeed 
 | `unresponsive` | **端口通但没响应**（进程活着但卡住） | 点配置页的 **「重启 Gopeed」** 按钮（唯一的重启入口，会中断下载） |
 | `misconfigured` | **进程在跑，但当前端口上没人应答**：程序没问题，端口不对 | 去 Gopeed「设置 → 高级 → 协议」看固定端口，填进插件配置；或把插件端口填 `0` 让插件自动检测 |
 | `stopped` | 连接被拒绝，且进程确实没查到（没启动） | `gopeed_launch`（等价双击图标） |
-| `unauthorized` | 进程好的，Token 不对 | 去配置页改 Token |
+| `unauthorized` | 进程好的，Token 不对（Gopeed 回 HTTP 401；端口自动检测照样认得这个端口，所以不是端口问题） | 去配置页改 Token |
 | `unknown` | 端口/地址不对，**或进程表读不出来** | 检查地址、端口、Gopeed 的协议设置；`processProbe` 为 `unavailable` 时不要当成 `stopped` |
 
 `misconfigured` 是为了修掉过去的误判：进程明明在跑、只是端口对不上时，报 `stopped` 会让你去启动一个已经启动的程序。
@@ -452,10 +452,14 @@ toast 开关都没有新增 prompt 文本。
 
 ### 检测到未就绪时，工具会主动找用户
 
-用户不一定会去翻文档。所以任何工具在遇到「连不上 / 超时 / Token 不对」时，会把一条**英文分步说明**写进
+用户不一定会去翻文档。所以任何工具在遇到「连不上 / 超时」时，会把一条**英文分步说明**写进
 **本次工具自己的输出**（异常信息，或 `gopeed_process.advice`），内容是「装 Gopeed → 在协议里固定端口 → 对齐 Token」
 （英文是因为这段文字进的是 agent 上下文）。全生命周期**只发一次**，且拼装失败不影响工具本身的报错。
 任务级错误（比如对不存在的 id 操作，`code:1000`）**不会**触发这条提示，避免打扰。
+
+**Token 填错走另一条路**：调用会以 `-- the token is wrong; set it in the plugin settings (gopeed_process
+explains it)` 结尾（Gopeed 回 HTTP 401，`code=1001 msg=unauthorized`）。这句话已经说明「端口是对的、只是 Token 不对」，
+所以把 Gopeed 和插件两边的 Token 对齐即可，不用去查端口、也不用重装。
 
 注意它**不是聊天消息**：`deferContext` 已被移除，插件不会以用户身份说话。
 

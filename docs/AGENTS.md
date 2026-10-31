@@ -35,6 +35,8 @@ Do **not** use them to read a downloaded file, to fetch a web page for context, 
 Parameter notes that prevent wrong calls:
 
 - **`gopeed_add.path` is a DIRECTORY, not a file path.** A filename belongs in `name`.
+  Omitting `path` uses the configured save location (an explicit one wins over it); omitting `name` lets
+  Gopeed derive the name from the link.
 - **`gopeed_control.action` is a closed set**; any other verb is rejected. There is no "cancel" and no
   "restart".
 - **`gopeed_control.force` defaults to `true` for `remove`**, which deletes the downloaded files along with the
@@ -96,10 +98,11 @@ it is where the file actually landed -- quote it to the user rather than repeati
 | `verdict: "stopped"` | Gopeed is not running (or listens elsewhere). | `gopeed_process`, then `gopeed_launch`. Re-run `gopeed_process` to confirm `verdict: "running"`, then retry the original tool once. |
 | `verdict: "misconfigured"` | The process is alive but nothing answers on the configured port. | Do **not** launch another instance. Ask the user to read the fixed port under Gopeed -> Settings -> Advanced -> Protocol and enter it on the plugin settings page, or to keep the plugin `port` at `0` so it auto-detects. |
 | `verdict: "unresponsive"` | The port accepts connections but nothing replies. | Gopeed is stuck. There is no tool for this: ask the user to press **Restart Gopeed** on the plugin settings page (it interrupts running downloads). |
-| `verdict: "unauthorized"` | The token is wrong. | Ask the user to copy the token from Gopeed -> Settings -> Advanced -> Token into the plugin settings page. Never guess or fabricate one. |
+| `verdict: "unauthorized"` | The token is wrong, and the port is NOT the problem: Gopeed answers HTTP 401 (403 on some builds) with `code=1001 msg=unauthorized`, and port auto-detection deliberately keeps a port whose probe says `unauthorized`, because a Gopeed that answers proves the port. | Ask the user to copy the token from Gopeed -> Settings -> Advanced -> Token into the plugin settings page. Never guess or fabricate one. A `gopeed_add` that fails this way reads: `Error: gopeed_add failed: Gopeed /api/v1/tasks returned code=1001 msg=unauthorized -- the token is wrong; set it in the plugin settings (gopeed_process explains it)`. Relay that wording, leave the port alone, and do not retry until the token is fixed. |
 | `verdict: "unknown"` / connection refused, `processProbe: "unavailable"` | The environment is opaque, so "not running" is unverified. | Report the uncertainty; ask the user to check Gopeed. Never claim Gopeed is down. |
 | `code: 1000` or "task not found" | Gopeed no longer has that task -- it finished, or it was already removed. This is normal, not a failure. | Report it as-is. Any tracking job for it was cancelled. Do not retry the id. |
-| Connection failure, timeout, bad token on any tool | First-time setup is probably incomplete. | The tool appends a numbered English setup notice to its own result (and `gopeed_process.advice`). Relay that notice to the user verbatim-ish, then retry once after they act. |
+| Connection failure or timeout on any tool | First-time setup is probably incomplete. | The tool appends a numbered English setup notice to its own result (and `gopeed_process.advice`). Relay that notice to the user verbatim-ish, then retry once after they act. |
+| Any call whose error ends with `-- the token is wrong; set it in the plugin settings` | The port is proven: a Gopeed answered there, only the token differs. This sentence is the whole message: the numbered setup notice targets an unreachable Gopeed, so do not walk the user through the install steps here. | Send the user straight to the token (row above), not through the install steps, and do not treat the sentence as a port or connection problem. |
 | Webhook mode `manual` and zero events | The user must enable **and** add the URL in Gopeed. | Point at Gopeed -> Settings -> Developer -> Webhook push: the "Enable webhook" switch must be ON **and** the address must be in the list. An address alone sends nothing. |
 
 ## Things not to do

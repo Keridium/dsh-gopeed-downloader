@@ -22,16 +22,20 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
   pointed at the port rather than the token, and `discoverApiPort` -- which deliberately keeps a port whose
   probe says `unauthorized`, because that proves a Gopeed is listening there -- gave up on the one port that
   was actually right. Both status codes now map to `unauthorized`.
-- **Two user-facing strings still said "API".** The project keeps that word out of anything a person or a model
-  reads, but the "port unknown" error still said `the API port is unknown` and one diagnosis line in
-  `gopeed_process` said `the verdict relies on the API`. They now say "listen port" and "HTTP probe". Found by
-  a blind test that only saw the tool definitions and the resulting error text.
+- **Five user-facing string sites still said "API".** The project keeps that word out of anything a person or a
+  model reads, but the task-error envelope still said `Gopeed API /api/v1/tasks returned ...`, the "port unknown"
+  error said `the API port is unknown`, the `apiLatencyMs` and `apiDetail` output-schema descriptions said "API
+  latency" and "API probe", and one diagnosis line in `gopeed_process` said `the verdict relies on the API`. They
+  now say `Gopeed <route> returned ...`, "listen port", "Endpoint latency" / "Endpoint probe" and "HTTP probe".
+  Found by a blind test that only saw the tool definitions and the resulting error text.
 - **`gopeed_add.path` says what happens when it is omitted.** The parameter description was `Save dir`,
   which named the unit but not the consequence: a model reading only the tool definition had no way to know
   that leaving `path` out uses the configured save location, or that passing it wins over that setting. It is
   now `Save dir (omit = use the configured location)` (+37 characters). This matters because the tool
   definition is usually the only thing an agent reads -- the full precedence order lives in
-  `docs/AGENTS.md`, which a model calling the tool does not necessarily open.
+  `docs/AGENTS.md`, which a model calling the tool does not necessarily open. Its sibling `name` gained
+  `File name (optional)` for the same reason (+37 characters), so a model reading only the schema knows a
+  file name is optional and that omitting it is safe.
 - **The README states which link types work.** Direct HTTP/HTTPS links, magnet links and remote `.torrent`
   URLs all work; a local `.torrent` file does not, because the plugin has no upload path -- pass the URL it
   came from. BitTorrent detail (peers, DHT, trackers, seeding) stays with Gopeed, which is worth saying because

@@ -95,7 +95,7 @@ Token 就是一把「暗号」，Gopeed 和插件两边必须完全一样。**Go
 4. **你应该看到**：表单上方「当前请求地址」显示为 `http://127.0.0.1:9999`（端口填 `0` 时预览里显示的就是 `0`，保存后插件会自动检测真实端口）。
 5. 点「保存」。**你应该看到**提示「已保存，配置即时生效」。
 
-小提醒：Token 框留空表示「不修改已保存的值」。如果你在 Gopeed 里设过 Token、又不确定插件里存的是不是同一个，就把 Token 重新输入一遍再保存。
+小提醒：Token 框留空表示「不修改已保存的值」。如果你在 Gopeed 里设过 Token、又不确定插件里存的是不是同一个，就把 Token 重新输入一遍再保存。Token 填错时工具会直接报 `unauthorized` / `the token is wrong`，不会说成「连不上」；看到这句话就回第 3 步把两边对齐，不用去查端口。
 
 ## 第 6 步：验证
 
@@ -177,8 +177,8 @@ Token 就是一把「暗号」，Gopeed 和插件两边必须完全一样。**Go
 
 ### 2. 显示 `verdict: unauthorized`
 
-- **现象**：能连上，但提示未授权。
-- **原因**：Gopeed 里的 Token 和插件里填的不一致。
+- **现象**：能连上，但提示未授权；错误信息通常带 `code=1001 msg=unauthorized -- the token is wrong; set it in the plugin settings`。
+- **原因**：Gopeed 里的 Token 和插件里填的不一致。Gopeed 会回 HTTP 401，插件据此判定 `unauthorized`；这也说明**端口已经被确认是对的**（自动检测不会因为 Token 错就丢掉这个端口），所以别去动端口。
 - **怎么办**：回第 3 步看 Gopeed 里的 Token，再回第 5 步重新输入并保存。注意大小写和多余空格。Token 框留空表示「不修改」，所以一定要重新输入一次。
 
 ### 3. 显示 `verdict: unresponsive`（端口通但不响应）

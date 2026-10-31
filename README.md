@@ -120,7 +120,9 @@ immediately, with no plugin remount and no DSH restart. Every field's hint reads
 - **`port`** -- default `0` = auto-detect the live port of the running process. An empty box is rejected on
   save, so auto-detect means typing `0`, not clearing the field.
 - **`token`** -- empty (the default) means no token is sent, which is what Gopeed ships with. An empty field
-  **keeps the stored token** instead of clearing it; the browser only ever sees "set" / "not set".
+  **keeps the stored token** instead of clearing it; the browser only ever sees "set" / "not set". A wrong
+  token is reported as `unauthorized` -- Gopeed answers HTTP 401, so it never looks like a connection failure,
+  and auto-detection keeps the port it found. Only the token needs fixing.
 - **`exePath`** -- empty (the default) = auto-detect. Only portable or non-standard installs need it.
 - **`webhookMode`** -- `off` (default) / `manual` / `auto`; **`webhookPort`** -- `0` = system-assigned (the URL
   then changes across restarts), a concrete number keeps it stable; **`webhookToast`** -- off by default,
@@ -313,11 +315,13 @@ once the process listens) and probes the *resolved* port, not the raw `0`, so an
 alone instead of being launched twice. If the process list cannot be read there is no pid, so the restart path
 says so and gives manual steps instead of reporting success.
 
-**Guiding the user.** When any tool hits a connection failure, a timeout or a bad token, it appends a short
-English step-by-step notice to **that tool's own result** (an error message, or `gopeed_process.advice`):
-install Gopeed, open its protocol settings and pin the port, match the token. It is appended **at most once per
-plugin lifetime**, and a failure to build it never masks the tool's own error. Task-level errors -- an unknown
-id, for example -- deliberately do not trigger it.
+**Guiding the user.** When any tool hits a connection failure or a timeout, it appends a short English
+step-by-step notice to **that tool's own result** (an error message, or `gopeed_process.advice`): install
+Gopeed, open its protocol settings and pin the port, match the token. It is appended **at most once per plugin
+lifetime**, and a failure to build it never masks the tool's own error. Task-level errors -- an unknown id, for
+example -- deliberately do not trigger it. **A wrong token takes a shorter route:** the failure ends with
+`-- the token is wrong; set it in the plugin settings (gopeed_process explains it)`. That sentence already
+means the port is right (the 401 answer proves it), so the repair is the token and nothing else.
 
 **Sandbox vs. plugin runtime.** Read-only diagnosis (`tasklist`, `Get-Process`, `netstat`,
 `Get-NetTCPConnection`, `netsh`, file reads, the loopback probe) runs **unconfined**, because a confined shell
