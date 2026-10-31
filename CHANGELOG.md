@@ -42,6 +42,13 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
   `Config.timeoutMs` at 120,000: the old code ran the full 120 seconds, the fixed one fails cleanly at
   21.0 seconds with a message that says what was submitted and what was not.
 
+- **`gopeed_launch` started a second instance when the token was merely wrong.** It counted only an
+  `ok` probe as "already running", so a 401 -- which proves a Gopeed is listening on that port --
+  fell through to the launch path. The new process exited immediately because Gopeed is
+  single-instance, and the tool then reported "Started Gopeed", which was false and hid the actual
+  problem. `unauthorized` now counts as running, and the message says the token is wrong instead of
+  claiming a start.
+
 ### Known limitations
 
 - **The read-only tools still have an unbounded port phase behind the same tool timeout.** `gopeed_list`,

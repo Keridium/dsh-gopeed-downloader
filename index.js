@@ -2603,17 +2603,25 @@ export function apply(ctx, config) {
       // Ask the API first: when it is already running, skip pointless path detection (saves one
       // PowerShell invocation).
       const before = await probeApi(base)
-      const alreadyRunning = before.state === 'ok'
+      // 'unauthorized' also proves a Gopeed is listening on that port -- only the token is wrong.
+      // Treating it as "not running" started a second instance (Gopeed is single-instance, so the
+      // new one just exits) and then reported "Started Gopeed", which was false and hid the real
+      // problem: a wrong token, which starting anything cannot fix.
+      const alreadyRunning = before.state === 'ok' || before.state === 'unauthorized'
 
       if (alreadyRunning) {
+        const tokenProblem = before.state === 'unauthorized'
         return {
           launched: false,
           alreadyRunning: true,
           pid: 0,
           apiState: before.state,
-          message:
-            `Gopeed is already running (${before.detail}); not starting it again. If it is stuck, ` +
-            'the user can press "Restart Gopeed" on the plugin config page.',
+          message: tokenProblem
+            ? `Gopeed is already running (${before.detail}); the token is wrong, so this session ` +
+              'cannot use it yet. Set the token in the plugin settings to the one configured in Gopeed. ' +
+              'Do not start another instance -- that cannot help.'
+            : `Gopeed is already running (${before.detail}); not starting it again. If it is stuck, ` +
+              'the user can press "Restart Gopeed" on the plugin config page.',
           ...NO_LAUNCH_SANDBOX,
         }
       }
