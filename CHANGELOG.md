@@ -23,8 +23,21 @@ project README lives in [docs/README.zh.md](docs/README.zh.md).
   `Agent.followup` (removed) would have opened a turn with a user-role message, and `Agent.inject` (kept as a
   fallback) queues context for the next step but cannot wake an idle agent.
 - **`jobId` / `jobNote` on `gopeed_add`.** `jobId` names the tracking job, and the tool's own output points at
-  `job_output <jobId>`. They live in `output.schema` only, which DSH does not project into the system prompt, so
-  the seven tool definitions still total **1217 characters**; `parameters` are unchanged.
+  `job_output <jobId>`, tells the agent **not to poll** for progress, and only suggests polling `gopeed_status`
+  when no job could be started. They live in `output.schema` only, which DSH does not project into the system
+  prompt, so these fields add **zero** prompt characters; `parameters` are unchanged.
+- **A three-way download location policy.** Two new volatile settings decide where a `gopeed_add` download is
+  saved: `downloadTarget` (`workspace` default / `gopeed` / `custom`) and `customDownloadPath`. An explicit
+  `path` argument always wins, then the calling session's workspace directory (`session.header.cwd`), then
+  `customDownloadPath`, otherwise the path is left unset and Gopeed uses its own configured download directory.
+  A fallback is reported in `jobNote` rather than happening silently: an unresolvable workspace, or `custom`
+  with an empty path, falls back to Gopeed's directory and says so.
+- **`gopeed_add` reports the directory that was actually used.** After Gopeed accepts the task, the plugin reads
+  it back once and takes `meta.opts.path`, so an add without `path` returns the real save directory instead of
+  an empty string, and a derived name when none was supplied.
+- **Optional plugin toast: `webhookToast`.** Off by default, because Gopeed already posts its own Windows
+  notification and a second toast duplicates it. It gates the user-facing overlay only -- job wake-up,
+  `Agent.inject` and the `gopeed_events` cache are unaffected.
 - **Graceful degradation.** Without a `ctx.jobs` service, or without a controller serving the calling session,
   `gopeed_add` still works: `jobId` is `""` and `jobNote` says why no completion notice will arrive. A rejected
   job never fails the download.
@@ -33,12 +46,28 @@ project README lives in [docs/README.zh.md](docs/README.zh.md).
 
 ### Changed
 
-- **Three notification channels instead of two, with no duplicate delivery.** The overlay toast is unchanged and
-  still independent of the agent. `Agent.inject` (`source: { kind: "dsh-gopeed" }`, no chat bubble) is now the
-  **fallback**, used only for a completion no job covers -- a download started in the Gopeed UI or by another
-  client, or any download on a host without `ctx.jobs`. A task a background job owns is deliberately **not**
-  injected, because the job notice already carries the same completion and a real session showed the model
-  reading it twice. `webhookNotify` now controls only the toast and inject channels.
+- **Three notification channels instead of two, with no duplicate delivery.** The overlay toast is still
+  independent of the agent, but it is now opt-in (`webhookToast`, off by default). `Agent.inject`
+  (`source: { kind: "dsh-gopeed" }`, no chat bubble) is now the **fallback**, used only for a completion no job
+  covers -- a download started in the Gopeed UI or by another client, or any download on a host without
+  `ctx.jobs`. A task a background job owns is deliberately **not** injected, because the job notice already
+  carries the same completion and a real session showed the model reading it twice. `webhookNotify` now gates
+  the inject fallback and the toast, while `webhookToast` gates the toast alone.
+- **Tool descriptions state capability instead of terse fragments.** `gopeed_add`, `gopeed_list`,
+  `gopeed_status`, `gopeed_process` and `gopeed_launch` were rewritten (for example `Create task.` became
+  `Download a URL through Gopeed. Returns a tracking job.`), taking the seven tool definitions from
+  **1217 to 1343 characters** (+126). The job fields from 0.3.0 add nothing because they only live in
+  `output.schema`. The README and `package.json` openers were also changed to describe capabilities and
+  boundaries rather than "open the config page and enter the address and port".
+- **The settings page no longer exposes API vocabulary.** The visible labels are now **Gopeed listen address /
+  Port / Token** (the Chinese UI uses the equivalent translated labels); the token hint says "request header"
+  instead of `X-Api-Token`; the restart success line says "Gopeed is ready" instead of "the Gopeed API is
+  ready". The fields are still the same settings.
+- **The webhook block is a collapsed drawer.** It starts collapsed and its summary line shows the current mode;
+  the duty note stays visible and states plainly that wake-up is handled by a DSH background task and does not
+  depend on the webhook. `webhookPort` is shown only for `manual`, and the toast switch sits inside the drawer.
+- **Gopeed attribution.** The READMEs now state that this is an independent, unofficial integration, that
+  Gopeed is GPL-3.0, and that no Gopeed code is bundled, linked or redistributed.
 - **Paused tasks are polled slowly.** A task in `pause` or `wait` is polled every 30 seconds instead of every 3,
   and those reads are counted against their own budget, not the moving-download one.
 - **Version badges report 0.3.0.** The browser bundle constant and the packaged `version` moved together, so the
@@ -60,6 +89,16 @@ project README lives in [docs/README.zh.md](docs/README.zh.md).
 - **The terminal detail repeated its own reason.** A `kill()` forwards the reason to the producer, and the
   registry appends it again, so the detail read "removed by gopeed_control; removed by gopeed_control". The
   producer now contributes a generic detail on that path and the reason appears once.
+- **`gopeed_add` echoed the caller's path instead of the real one.** An add without `path` reported an empty
+  save directory even though Gopeed had already filled `meta.opts.path` with its configured download directory,
+  so the agent could not say where the file went. The task is now read back and the resolved directory reported.
+- **`gopeed_launch` could report a freshly started Gopeed as not ready.** It probed one port for the whole
+  readiness budget, but a newly started desktop Gopeed comes up on a new random port that only exists once the
+  process listens, so a successful launch was reported as a failure. Detection and probing now run in a loop for
+  up to 15 seconds, the same fix the restart path already had.
+- **Setup guidance blamed a missing install for a crashed program.** `SETUP_GUIDE` and `SETUP_NOTICE` said
+  "install Gopeed" even when Gopeed was installed but closed or crashed; both now say to start it first and to
+  install only when it is really absent.
 - **A pasted `host:port` or URL failed with a misleading error.** The `host` field had no format check, so
   the two shapes people actually paste -- `127.0.0.1:9999` and `http://127.0.0.1` -- became
   `http://127.0.0.1:9999:9999` (ERR_INVALID_URL) or `http://http://127.0.0.1:9999` (a DNS lookup of the name
@@ -75,9 +114,20 @@ project README lives in [docs/README.zh.md](docs/README.zh.md).
 
 ### Documentation
 
-- README gained **Download wake-up (background jobs)** and the notification section became **Three notification
-  channels, none in the conversation**; `docs/README.zh.md` mirrors both. Known limitations gained the
-  "tracking does not survive a DSH restart" entry.
+- README gained **Download wake-up (background jobs)** and **Where a download is saved**, and the notification
+  section became **Three notification channels, none in the conversation**; `docs/README.zh.md` mirrors all of
+  them. Known limitations gained the "tracking does not survive a DSH restart" entry.
+- **BT / magnet is documented as lightly tested.** A Debian 13.7 netinst ISO magnet was verified end to end:
+  metadata resolved to 756 MB, the transfer started at about 4 MB/s, and the tracking job followed it. Harder
+  cases (no peers, DHT-only discovery, a private tracker, resuming after a restart) are still unverified, and
+  the limitation says so instead of claiming full support.
+- `docs/GETTING-STARTED.md` was updated for the new fields: the **download location** dropdown sits above the
+  listen address, the address field is **Gopeed listen address** and takes only the IP, and the three save
+  targets are explained.
+- **Config-only fields are now labelled as such.** `timeoutMs`, `portScan` and `webhookNotify` exist in the
+  schema but the custom settings form does not render controls for them; the docs earlier implied they were on
+  the page. They are now marked config-only, with `cordis.patch.yml` (`id: gopeed`) named as where to set them.
+  This was a documentation bug, not a code change.
 
 ## [0.2.1] - 2026-10-31
 

@@ -51,12 +51,19 @@ window.__ModuleLoader__.load({
     const zh = {
       summary: 'Gopeed 下载器：新建 / 列表 / 查进度 / 暂停 / 继续 / 删除，地址与 Token 可在这里配置。',
       title: '连接设置',
-      host: '地址',
-      hostHint: 'Gopeed 设置 → 高级 → 协议（TCP）里的监听地址，一般就是 127.0.0.1。',
+      downloadTarget: '下载位置',
+      downloadTargetHint: '工作区 = 当前会话的目录；Gopeed 默认 = 由 Gopeed 设置决定；自定义 = 你自己填。',
+      downloadTargetWorkspace: '工作区',
+      downloadTargetGopeed: 'Gopeed 默认目录',
+      downloadTargetCustom: '自定义',
+      customDownloadPath: '自定义路径',
+      customDownloadPathPlaceholder: '例如 D:\\Downloads',
+      host: 'Gopeed 监听地址',
+      hostHint: '只填 IP 或主机名，例如 127.0.0.1；不要带 http://，也不要带端口（端口填在下面）。这个地址在 Gopeed 的 设置 → 高级 → 协议（TCP）里。',
       port: '端口',
       portHint: '默认 0：由插件自动检测正在运行的 Gopeed 占用的端口；如果在 Gopeed 里固定了端口，这里就填同一个数字（例如 9999）。',
       token: 'Token',
-      tokenHint: 'Gopeed 设置 → 高级 → Token，插件会把它放在 X-Api-Token 请求头里。',
+      tokenHint: 'Gopeed 设置 → 高级 → Token，插件会把它放在请求头里。',
       exe: '程序路径（可选）',
       exeHint: '留空即可：插件先找 Gopeed 的默认安装路径，找不到再依次从「运行中的进程 → 注册表 → 开始菜单/桌面快捷方式 → 常见路径」自动查找。都没有才需要手填（绿色版/非标准安装）。',
       exePlaceholder: '留空 = 自动查找（推荐）',
@@ -80,9 +87,9 @@ window.__ModuleLoader__.load({
       webhookDrawerExpand: '展开',
       webhookDrawerCollapse: '收起',
       webhookDutyTitle: 'Webhook 负责什么：',
-      webhookDutyWake: '「下载完成自动唤醒 agent」不依赖 webhook：它由 DSH 的后台任务每 3 秒轮询一次 Gopeed API 完成，不配 webhook 也照样能用。',
+      webhookDutyWake: '「下载完成自动唤醒 agent」不依赖 webhook：它由 DSH 的后台任务负责，不配 webhook 也照样能用。',
       webhookDutyPush: 'webhook 只是可选增强：不配也能自动唤醒、也能用 gopeed_list 查任务；配了才有推送类能力——右下角 toast 通知、gopeed_events 的事件缓存，以及某个下载没有被 job 跟踪时的 Agent.inject 兜底。',
-      webhookDutySlower: '它不会让唤醒更快：唤醒走的是轮询，和 webhook 无关。',
+      webhookDutySlower: '它不会让唤醒更快：唤醒由后台任务负责，和 webhook 无关。',
       webhookDutyRestart: '配置后必须完全退出并重启 Gopeed 才生效（只把窗口关到托盘不算重启）。',
       webhookModeOff: 'off — 默认，不启用',
       webhookModeOffHint: '不监听任何端口；下载完成后需要你自己调用 gopeed_list 查询状态。',
@@ -94,7 +101,7 @@ window.__ModuleLoader__.load({
       webhookPortHint: '填一个 0–65535 的整数：0 = 由系统自动分配空闲端口（每次可能不同），填具体数字则固定使用它。',
       webhookPortRandom: '随机生成',
       webhookToast: '右下角通知',
-      webhookToastHint: 'Gopeed 自己会在 Windows 通知中心弹一条。这里打开的话插件也会弹一条内容更详细的（名称 / 大小 / 路径），但会和 Gopeed 那条重复：想要详细信息就打开，嫌吵就关着。这个开关只影响给用户看的 toast，不影响 job 唤醒（轮询）、Agent.inject 兜底和 gopeed_events 事件缓存。',
+      webhookToastHint: 'Gopeed 自己会在 Windows 通知中心弹一条。这里打开的话插件也会弹一条内容更详细的（名称 / 大小 / 路径），但会和 Gopeed 那条重复：想要详细信息就打开，嫌吵就关着。这个开关只影响给用户看的 toast，不影响 job 唤醒（后台任务）、Agent.inject 兜底和 gopeed_events 事件缓存。',
       webhookPortInvalid: 'Webhook 端口必须是 0–65535 之间的整数（0 = 自动分配）。',
       webhookStatus: 'Webhook 状态',
       webhookStatusMode: '当前模式',
@@ -111,7 +118,7 @@ window.__ModuleLoader__.load({
       restartHint: '会中断正在进行的下载',
       restartConfirm: '重启 Gopeed 会中断正在进行的下载，确定继续吗？',
       restarting: '重启中…',
-      restartOk: '重启成功，Gopeed API 已就绪。',
+      restartOk: '重启成功，Gopeed 已就绪。',
       restartFail: '重启失败：',
       restartUnavailable: '页面无法调用重启接口（Connection 通道不可用）。',
       notifyDone: '下载完成',
@@ -123,12 +130,19 @@ window.__ModuleLoader__.load({
     const en = {
       summary: 'Gopeed downloader: add / list / status / pause / resume / remove, with editable host and token.',
       title: 'Connection',
-      host: 'Host',
-      hostHint: 'The listen address from Gopeed -> Settings -> Advanced -> Protocol (TCP); usually 127.0.0.1.',
+      downloadTarget: 'Save to',
+      downloadTargetHint: 'Workspace = this session folder; Gopeed default = whatever Gopeed is set to; Custom = your own path.',
+      downloadTargetWorkspace: 'Workspace',
+      downloadTargetGopeed: 'Gopeed default',
+      downloadTargetCustom: 'Custom',
+      customDownloadPath: 'Custom path',
+      customDownloadPathPlaceholder: 'e.g. D:\\Downloads',
+      host: 'Gopeed listen address',
+      hostHint: 'IP or hostname only, e.g. 127.0.0.1 - no http:// and no port (the port goes in the field below). Find it in Gopeed under Settings -> Advanced -> Protocol (TCP).',
       port: 'Port',
       portHint: 'Defaults to 0: the plugin auto-detects the port the running Gopeed holds. Enter the same fixed number you pinned in Gopeed (for example 9999) only if you pinned one.',
       token: 'Token',
-      tokenHint: 'Gopeed -> Settings -> Advanced -> Token, sent as the X-Api-Token header.',
+      tokenHint: 'Gopeed -> Settings -> Advanced -> Token, sent as a request header.',
       exe: 'Executable (optional)',
       exeHint: 'Leave blank: the plugin tries the default Gopeed install path first, then the running process, the registry, Start Menu/Desktop shortcuts, and common paths. Fill it only for portable or unusual installs.',
       exePlaceholder: 'Blank = auto-detect (recommended)',
@@ -152,9 +166,9 @@ window.__ModuleLoader__.load({
       webhookDrawerExpand: 'Expand',
       webhookDrawerCollapse: 'Collapse',
       webhookDutyTitle: 'What the webhook is for:',
-      webhookDutyWake: 'Automatic agent wake-up on download complete does NOT depend on the webhook: a DSH background task polls the Gopeed API every 3 seconds, so wake-up works with the webhook off.',
+      webhookDutyWake: 'Automatic agent wake-up on download complete does NOT depend on the webhook: it is handled by a DSH background task, so wake-up works with the webhook off.',
       webhookDutyPush: 'The webhook is an optional enhancement only: wake-up and gopeed_list queries work without it; only push-based extras need it - the bottom-right toast notices, the gopeed_events event cache, and the Agent.inject fallback for a download no job is tracking.',
-      webhookDutySlower: 'It never makes wake-up faster: wake-up is polling, unrelated to the webhook.',
+      webhookDutySlower: 'It never makes wake-up faster: wake-up is handled by a background task, unrelated to the webhook.',
       webhookDutyRestart: 'Once configured, Gopeed must be fully quit and restarted for it to take effect (closing the window to the tray does not count).',
       webhookModeOff: 'off - disabled (default)',
       webhookModeOffHint: 'Listen on no port; after a download finishes you have to ask gopeed_list yourself.',
@@ -166,7 +180,7 @@ window.__ModuleLoader__.load({
       webhookPortHint: 'An integer from 0 to 65535: 0 lets the system pick a free port (it may differ each time), any number is pinned as-is.',
       webhookPortRandom: 'Random port',
       webhookToast: 'Corner toast',
-      webhookToastHint: 'Gopeed already posts its own notification through the Windows notification center. Enabling this makes the plugin show its own toast with more detail (name / size / path), which duplicates the Gopeed one: turn it on for the detail, leave it off to stay quiet. This switch only affects user-facing toasts; it does not affect job wake-up (polling), the Agent.inject fallback, or the gopeed_events event cache.',
+      webhookToastHint: 'Gopeed already posts its own notification through the Windows notification center. Enabling this makes the plugin show its own toast with more detail (name / size / path), which duplicates the Gopeed one: turn it on for the detail, leave it off to stay quiet. This switch only affects user-facing toasts; it does not affect job wake-up (background task), the Agent.inject fallback, or the gopeed_events event cache.',
       webhookPortInvalid: 'Webhook port must be an integer between 0 and 65535 (0 = auto-assign).',
       webhookStatus: 'Webhook status',
       webhookStatusMode: 'Current mode',
@@ -183,7 +197,7 @@ window.__ModuleLoader__.load({
       restartHint: 'Interrupts downloads in progress',
       restartConfirm: 'Restarting Gopeed interrupts downloads in progress. Continue?',
       restarting: 'Restarting...',
-      restartOk: 'Restarted. The Gopeed API is ready.',
+      restartOk: 'Restarted. Gopeed is ready.',
       restartFail: 'Restart failed: ',
       restartUnavailable: 'This page cannot reach the restart route (Connection channel unavailable).',
       notifyDone: 'Download finished',
@@ -211,6 +225,27 @@ window.__ModuleLoader__.load({
         font: 'inherit',
         outline: 'none',
       },
+      // Same visual weight as an input, but a select keeps the three save targets to one row.
+      // colorScheme: 'dark' alone is not enough: the native option list still inherits the theme's
+      // light text over its own white popup, so options render white-on-white. The option style
+      // below pins the popup to dark text on white, which stays legible in either theme.
+      select: {
+        width: '100%',
+        boxSizing: 'border-box',
+        padding: '7px 10px',
+        borderRadius: '8px',
+        border: '1px solid rgba(127,127,127,0.38)',
+        background: 'rgba(127,127,127,0.06)',
+        color: 'inherit',
+        colorScheme: 'dark',
+        font: 'inherit',
+        outline: 'none',
+        cursor: 'pointer',
+      },
+      // Native option lists use the browser's own background. Pinning dark text on white keeps them
+      // readable whether the surrounding theme is light or dark. Named selectOption because a
+      // separate `option` style already exists for the radio-row layout.
+      selectOption: { color: '#111827', background: '#ffffff' },
       row: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' },
       button: {
         padding: '6px 16px',
@@ -468,6 +503,16 @@ window.__ModuleLoader__.load({
       const [exePath, setExePath] = React.useState(
         typeof value.exePath === 'string' ? value.exePath : '',
       )
+      // Save location. Default workspace; any stored value other than the two explicit overrides
+      // falls back to workspace, so a stale or malformed config can never leave a blank select.
+      const initialDownloadTarget =
+        value.downloadTarget === 'gopeed' || value.downloadTarget === 'custom'
+          ? value.downloadTarget
+          : 'workspace'
+      const [downloadTarget, setDownloadTarget] = React.useState(initialDownloadTarget)
+      const [customDownloadPath, setCustomDownloadPath] = React.useState(
+        typeof value.customDownloadPath === 'string' ? value.customDownloadPath : '',
+      )
       const initialWebhookMode =
         value.webhookMode === 'manual' || value.webhookMode === 'auto' ? value.webhookMode : 'off'
       const [webhookMode, setWebhookMode] = React.useState(initialWebhookMode)
@@ -636,6 +681,22 @@ window.__ModuleLoader__.load({
         if (nextToken.length > 0) ops.push({ op: 'set', path: ['token'], value: nextToken })
         const nextExe = exePath.trim()
         if (nextExe !== String(value.exePath ?? '')) ops.push({ op: 'set', path: ['exePath'], value: nextExe })
+        // Save location: both fields are submitted only when they actually changed, like every
+        // other field above. The custom path is trimmed because trailing spaces are never useful
+        // in a directory.
+        const storedDownloadTarget =
+          value.downloadTarget === 'gopeed' || value.downloadTarget === 'custom'
+            ? value.downloadTarget
+            : 'workspace'
+        const nextDownloadTarget =
+          downloadTarget === 'gopeed' || downloadTarget === 'custom' ? downloadTarget : 'workspace'
+        if (nextDownloadTarget !== storedDownloadTarget) {
+          ops.push({ op: 'set', path: ['downloadTarget'], value: nextDownloadTarget })
+        }
+        const nextCustomDownloadPath = customDownloadPath.trim()
+        if (nextCustomDownloadPath !== String(value.customDownloadPath ?? '')) {
+          ops.push({ op: 'set', path: ['customDownloadPath'], value: nextCustomDownloadPath })
+        }
         const storedWebhookMode =
           value.webhookMode === 'manual' || value.webhookMode === 'auto' ? value.webhookMode : 'off'
         if (nextWebhookMode !== storedWebhookMode) {
@@ -680,6 +741,53 @@ window.__ModuleLoader__.load({
           h('span', { style: styles.version, title: `dsh-gopeed client ${CLIENT_VERSION}` }, `v${CLIENT_VERSION}`),
           h('span', { style: styles.base }, `${t('base')} ${baseUrl}`),
         ),
+        // Save location comes before the connection fields on purpose: it is the setting a user
+        // changes most often, and it is one compact select plus one hint line. The custom path
+        // input is rendered ONLY for the custom target, so the common case stays a single row.
+        h(
+          'div',
+          { style: styles.field },
+          h(
+            'label',
+            { style: styles.label, htmlFor: 'dsh-gopeed-download-target' },
+            t('downloadTarget'),
+          ),
+          h(
+            'select',
+            {
+              id: 'dsh-gopeed-download-target',
+              style: styles.select,
+              value: downloadTarget,
+              disabled: busy || state.writable === false,
+              onChange: (event) => setDownloadTarget(event.target.value),
+            },
+            h('option', { value: 'workspace', style: styles.selectOption }, t('downloadTargetWorkspace')),
+            h('option', { value: 'gopeed', style: styles.selectOption }, t('downloadTargetGopeed')),
+            h('option', { value: 'custom', style: styles.selectOption }, t('downloadTargetCustom')),
+          ),
+          note(styles.hint, t('downloadTargetHint')),
+        ),
+        downloadTarget === 'custom'
+          ? h(
+              'div',
+              { style: styles.field },
+              h(
+                'label',
+                { style: styles.label, htmlFor: 'dsh-gopeed-custom-path' },
+                t('customDownloadPath'),
+              ),
+              h('input', {
+                id: 'dsh-gopeed-custom-path',
+                style: styles.input,
+                type: 'text',
+                spellCheck: false,
+                value: customDownloadPath,
+                placeholder: t('customDownloadPathPlaceholder'),
+                disabled: busy || state.writable === false,
+                onChange: (event) => setCustomDownloadPath(event.target.value),
+              }),
+            )
+          : null,
         h(
           'div',
           { style: styles.field },

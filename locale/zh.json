@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Gopeed 下载器",
-    "description": "把本机 Gopeed 的下载任务接进 DSH：新建任务、查进度、暂停、继续、删除；地址、端口、Token 在它的配置页里填。"
+    "description": "把本机 Gopeed 的下载任务接进 DSH：新建任务、查进度、暂停、继续、删除；可以设置保存位置，下载完成还能唤醒空闲的 agent。"
   }
 }

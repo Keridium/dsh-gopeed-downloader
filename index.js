@@ -2,9 +2,9 @@
  * dsh-gopeed - exposes the Gopeed downloader REST API as DSH agent tools.
  *
  * Layout:
- * - Config: host / port / token / timeoutMs / exePath / portScan / webhookMode / webhookPort /
- *   webhookNotify / webhookToast, all `.volatile()`, so edits in the DSH settings UI (Plugins ->
- *   Installed -> dsh-gopeed -> Config) take effect immediately.
+ * - Config: downloadTarget / customDownloadPath / host / port / token / timeoutMs / exePath /
+ *   portScan / webhookMode / webhookPort / webhookNotify / webhookToast, all `.volatile()`, so edits
+ *   in the DSH settings UI (Plugins -> Installed -> dsh-gopeed -> Config) take effect immediately.
  * - apply: registers six tools on ctx.tools (add / list / status / control / process / launch) plus
  *   gopeed_events, and starts the loopback webhook receiver when webhookMode is manual or auto.
  *   With webhookNotify on, an accepted event is delivered through up to THREE channels, none of
@@ -156,11 +156,30 @@ const SLOW_STATUSES = new Set(['pause', 'wait'])
  * read back as set/unset instead of echoing it to the frontend.
  */
 export const Config = z.object({
+  downloadTarget: z
+    .union(['workspace', 'gopeed', 'custom'])
+    .default('workspace')
+    .description(
+      'Where a gopeed_add download is saved. workspace (default) = the current session workspace directory; ' +
+        'gopeed = leave the path unset so Gopeed uses the download directory from its own settings; ' +
+        'custom = use customDownloadPath. An explicit path argument to gopeed_add always wins over this.',
+    )
+    .volatile(),
+  customDownloadPath: z
+    .string()
+    .default('')
+    .description(
+      'Absolute download directory used when downloadTarget is custom. Leading and trailing whitespace is ' +
+        'trimmed. When it is empty, the download falls back to the Gopeed default directory. Ignored for the ' +
+        'other targets.',
+    )
+    .volatile(),
   host: z
     .string()
     .default('127.0.0.1')
     .description(
-      'Gopeed REST API address. This is the listen address from Gopeed Settings -> Advanced -> Protocol (TCP); use 127.0.0.1 when it only listens locally.',
+      'Gopeed listen address: the IP or host name only, from Gopeed Settings -> Advanced -> Protocol (TCP). ' +
+        'Use 127.0.0.1 when it only listens locally. Do not add a scheme or a port (the port has its own field).',
     )
     .volatile(),
   port: z
@@ -170,7 +189,7 @@ export const Config = z.object({
     .max(65535)
     .default(0)
     .description(
-      'Gopeed API port. 0 (default) = auto-detect: Gopeed\'s desktop build listens on 127.0.0.1:0, a random ' +
+      'Gopeed listen port. 0 (default) = auto-detect: Gopeed\'s desktop build listens on 127.0.0.1:0, a random ' +
         'port per launch, so the plugin asks Windows which port the running process actually holds. Set a ' +
         'number only to pin a specific port.',
     )
@@ -180,7 +199,7 @@ export const Config = z.object({
     .role('secret')
     .default('')
     .description(
-      'Gopeed API token, sent as X-Api-Token. Gopeed ships with an EMPTY token, which disables auth; ' +
+      'Gopeed token, sent as a request header. Gopeed ships with an EMPTY token, which disables auth; ' +
         'leave this blank to match. If you set a token in Gopeed -> Settings -> Advanced, enter the exact ' +
         'same value here.',
     )
@@ -1554,7 +1573,7 @@ export function apply(ctx, config) {
         pid,
         apiState: after.state,
         stage: 'api',
-        message: `Gopeed was restarted (pid ${pid})${pidNote} but its API was not ready within 15s (${after.state}: ${after.detail}). It may still be loading; check gopeed_process in a moment.`,
+        message: `Gopeed was restarted (pid ${pid})${pidNote} but it did not answer within 15s (${after.state}: ${after.detail}). It may still be loading; check gopeed_process in a moment.`,
         ...sandboxFacts,
       }
     }
@@ -1566,7 +1585,7 @@ export function apply(ctx, config) {
       apiState: after.state,
       stage: 'done',
       detail: after.detail,
-      message: `Restarted Gopeed (pid ${pid})${pidNote}; API ready: ${after.detail}. Running downloads may have been interrupted.`,
+      message: `Restarted Gopeed (pid ${pid})${pidNote}; ready: ${after.detail}. Running downloads may have been interrupted.`,
       ...sandboxFacts,
     }
   }
@@ -1694,7 +1713,7 @@ export function apply(ctx, config) {
   const SETUP_NOTICE = [
     '[!] Gopeed is not reachable, so this downloader plugin cannot work yet. Three checks fix it - no command line needed:',
     '1) Gopeed must be running. If it is installed but not running (it may have crashed or been closed), start it by double-clicking its icon. Only if it is not installed at all, download the Windows build from https://gopeed.com and install it.',
-    '2) Pin the API port: in Gopeed open Settings -> Advanced -> Protocol, keep TCP and set the address to a fixed port, for example 127.0.0.1:9999. Gopeed defaults to port 0, a random port on every launch; the plugin can usually detect it, but pinning removes the guesswork.',
+    '2) Pin the port: in Gopeed open Settings -> Advanced -> Protocol, keep TCP and set the address to a fixed port, for example 127.0.0.1:9999. Gopeed defaults to port 0, a random port on every launch; the plugin can usually detect it, but pinning removes the guesswork.',
     '3) Token (optional): if you set a token on that same page, enter the same value in DSH -> Plugins -> Installed -> Gopeed downloader -> row gopeed -> Config, with address 127.0.0.1 and the same port, then save.',
     'Tell me when that is done and I will check again.',
   ].join('\n')
@@ -1734,9 +1753,68 @@ export function apply(ctx, config) {
     return value.trim()
   }
 
+  /** Workspace directory of the calling session, or '' when this host/session does not expose one. */
+  const sessionWorkspaceOf = (exec) => {
+    try {
+      const cwd = exec?.agent?.session?.header?.cwd
+      return typeof cwd === 'string' ? cwd.trim() : ''
+    } catch {
+      return ''
+    }
+  }
+
+  /**
+   * Decide the save directory for gopeed_add.
+   *
+   * An explicit `path` argument always wins, so a caller that names a directory keeps the existing
+   * behavior. Otherwise Config.downloadTarget decides: workspace uses the calling session's own
+   * directory, custom uses customDownloadPath, and gopeed (or any unknown/fallback value) leaves
+   * the path unset so Gopeed fills in the download directory from its own settings.
+   * @param {unknown} requested Raw `path` argument.
+   * @param {any} exec Tool run context.
+   * @returns {{ path: string | undefined, note: string }} Path to pass to Gopeed (undefined = let
+   *   Gopeed choose) and a one-line ASCII note when a fallback happened.
+   */
+  const resolveDownloadPath = (requested, exec) => {
+    const explicit = optString(requested)
+    if (explicit) return { path: explicit, note: '' }
+    let target = ''
+    try {
+      target = String(config.downloadTarget.get() ?? '')
+    } catch {
+      target = ''
+    }
+    if (target === 'custom') {
+      let custom = ''
+      try {
+        custom = String(config.customDownloadPath.get() ?? '').trim()
+      } catch {
+        custom = ''
+      }
+      if (custom) return { path: custom, note: '' }
+      return {
+        path: undefined,
+        note:
+          'The download target is custom but customDownloadPath is empty, so this download uses the ' +
+          'Gopeed default directory.',
+      }
+    }
+    if (target === 'workspace') {
+      const cwd = sessionWorkspaceOf(exec)
+      if (cwd) return { path: cwd, note: '' }
+      return {
+        path: undefined,
+        note:
+          'The current session workspace path is unavailable, so this download falls back to the ' +
+          'Gopeed default directory.',
+      }
+    }
+    return { path: undefined, note: '' }
+  }
+
   ctx.tools.register({
     name: 'gopeed_add',
-    description: 'Create task.',
+    description: 'Download a URL through Gopeed. Returns a tracking job.',
     // Note: parameters omits additionalProperties. A defineTool-compiled parameter schema is
     // only {type, properties, required}; adding additionalProperties:false would cost about 170
     // characters across the tools on every turn. Validation lives in execute (reqString /
@@ -1774,7 +1852,11 @@ export function apply(ctx, config) {
           path: { type: 'string', description: 'Download directory; empty when not given.' },
           baseUrl: { type: 'string', description: 'Base URL used for this request.' },
           jobId: { type: 'string', description: 'Background job id; empty when none could be started.' },
-          jobNote: { type: 'string', description: 'Why no job tracks this download; empty on success.' },
+          jobNote: {
+            type: 'string',
+            description:
+              'Why no job tracks this download, plus any download-path fallback note; empty on success.',
+          },
         },
       },
       render: (_args, value) =>
@@ -1784,9 +1866,14 @@ export function apply(ctx, config) {
           value.name ? `Name: ${value.name}` : undefined,
           value.path ? `Save dir: ${value.path}` : undefined,
           value.jobId
-            ? `Tracking job: ${value.jobId}. A completion notice reaches this session when the download ends; read it with job_output ${value.jobId}.`
+            ? `Tracking job: ${value.jobId}. A completion notice reaches this session when the download ends; do not poll for progress. Read it with job_output ${value.jobId}.`
             : value.jobNote,
-          value.jobId ? undefined : `Check progress with gopeed_status (${value.baseUrl}).`,
+          // jobNote also carries a path fallback (for example an unavailable session workspace),
+          // which matters even when the tracking job started successfully.
+          value.jobId && value.jobNote ? value.jobNote : undefined,
+          value.jobId
+            ? undefined
+            : `No tracking job is available here, so poll gopeed_status (${value.baseUrl}) if you need the outcome.`,
         ]),
       presentationMeta: (_args, value) => ({ taskId: value.taskId }),
     },
@@ -1802,14 +1889,14 @@ export function apply(ctx, config) {
       rememberAgent(exec)
       await ensureApiPort()
       const url = reqString(args?.url, 'url')
-      const path = optString(args?.path)
+      const saveTarget = resolveDownloadPath(args?.path, exec)
       const taskName = optString(args?.name)
       try {
-        const taskId = await client.create({ url, path: path || undefined, name: taskName || undefined })
+        const taskId = await client.create({ url, path: saveTarget.path, name: taskName || undefined })
         // Read the task back: when `path` is omitted, Gopeed does NOT leave the save dir empty -- it
         // fills meta.opts.path with the downloadDir from its own settings. Reporting the caller's
         // empty argument would leave the agent with no idea where the file landed. One loopback GET.
-        let resolvedPath = path
+        let resolvedPath = saveTarget.path || ''
         let resolvedName = taskName
         try {
           const created = normalizeTask(await client.get(taskId))
@@ -1829,7 +1916,9 @@ export function apply(ctx, config) {
           path: resolvedPath,
           baseUrl: client.baseUrl(),
           jobId: tracked.jobId,
-          jobNote: tracked.note,
+          // Path fallback facts share the one additive note field: the output schema is fixed, and
+          // a note the agent can read is better than a silently redirected download.
+          jobNote: [saveTarget.note, tracked.note].filter(Boolean).join(' '),
         }
       } catch (error) {
         fail('add', error, exec)
@@ -1839,7 +1928,7 @@ export function apply(ctx, config) {
 
   ctx.tools.register({
     name: 'gopeed_list',
-    description: 'List tasks.',
+    description: 'List Gopeed downloads.',
     parameters: {
       type: 'object',
       properties: {
@@ -1890,7 +1979,7 @@ export function apply(ctx, config) {
 
   ctx.tools.register({
     name: 'gopeed_status',
-    description: 'Task by id.',
+    description: 'One download details by id.',
     parameters: {
       type: 'object',
       required: ['id'],
@@ -2014,7 +2103,7 @@ export function apply(ctx, config) {
 
   ctx.tools.register({
     name: 'gopeed_process',
-    description: 'Diagnose.',
+    description: 'Diagnose Gopeed: running, which port.',
     parameters: { type: 'object' },
     output: {
       schema: {
@@ -2063,7 +2152,7 @@ export function apply(ctx, config) {
           apiState: {
             type: 'string',
             enum: ['ok', 'refused', 'timeout', 'unauthorized', 'error'],
-            description: 'HTTP API probe result.',
+            description: 'HTTP probe result.',
           },
           apiLatencyMs: { type: 'integer', description: 'API latency in ms.' },
           apiDetail: { type: 'string', description: 'API probe detail.' },
@@ -2117,7 +2206,7 @@ export function apply(ctx, config) {
         const lines = [
           `Plugin: ${value.pluginVersion}`,
           `Status: ${value.verdict}`,
-          `API: ${value.apiState} (${value.apiLatencyMs}ms) - ${value.apiDetail}`,
+          `Probe: ${value.apiState} (${value.apiLatencyMs}ms) - ${value.apiDetail}`,
         ]
         if (value.version) {
           lines.push(
@@ -2220,7 +2309,7 @@ export function apply(ctx, config) {
             ? 'The optional port scan is enabled but nothing that answers like Gopeed was found.'
             : 'Windows will not let this process read another process sockets, and the optional port scan is off by design.'
           advice =
-            `Gopeed is running (pid ${proc.pid}) but its API port could not be determined: ${api.baseUrl} does not answer. ` +
+            `Gopeed is running (pid ${proc.pid}) but its port could not be determined: ${api.baseUrl} does not answer. ` +
             `${scanHint} Open Gopeed -> Settings -> Advanced -> Protocol, read the fixed port shown there ` +
             '(Gopeed uses a random port by default), then set "port" in the plugin config to that value.'
         } else if (proc.probe === 'unavailable') {
@@ -2303,7 +2392,7 @@ export function apply(ctx, config) {
         webhookError: receiver && receiver.status === 'listening' ? '' : receiverFailure,
         diagnosticsSandboxed: false,
         diagnosticsSandboxNote:
-          'Read-only diagnosis only: the process table, socket listing, executable lookup and loopback API probe ran directly with DSH host permissions and are NOT confined by any file policy. Starting or stopping Gopeed is the confined part, so a sandbox denial never hides the process from this diagnosis.',
+          'Read-only diagnosis only: the process table, socket listing, executable lookup and loopback probe ran directly with DSH host permissions and are NOT confined by any file policy. Starting or stopping Gopeed is the confined part, so a sandbox denial never hides the process from this diagnosis.',
         advice,
       }
     },
@@ -2313,7 +2402,7 @@ export function apply(ctx, config) {
     name: 'gopeed_launch',
     // Starting is safe to expose as a tool; KILLING the process is not. Restarting is offered only
     // by the "Restart Gopeed" button on the plugin config page.
-    description: 'Start if not running.',
+    description: 'Start the Gopeed process if it is not running.',
     parameters: {
       type: 'object',
       properties: {},
@@ -2339,7 +2428,7 @@ export function apply(ctx, config) {
           apiState: {
             type: 'string',
             enum: ['ok', 'refused', 'timeout', 'unauthorized', 'error'],
-            description: 'Last API probe result after launching.',
+            description: 'Last probe result after launching.',
           },
           message: { type: 'string', description: 'Human-readable result.' },
           launchSandboxed: {
@@ -2464,6 +2553,16 @@ export function apply(ctx, config) {
         if (Date.now() >= deadline) break
         await new Promise((resolve) => setTimeout(resolve, 700))
       }
+      // The loop's placeholder state is 'unknown', which is NOT in the output schema's enum. When
+      // the port cannot be determined at all (process table invisible, portScan off) the placeholder
+      // would survive to the return value and DSH would reject the whole tool call as invalid output,
+      // turning a successful launch into a fake failure. Normalise it before returning.
+      if (after.state === 'unknown') {
+        after = {
+          state: 'error',
+          detail: `Gopeed was started (pid ${launch.pid || launch.pid === 0 ? launch.pid : 'unknown'}) but its listening port could not be determined within 15s`,
+        }
+      }
       const ok = after.state === 'ok'
       const pidNote = launch.sandbox?.sandboxed
         ? ' (pid is the sandbox runner; the confined Gopeed pid is detected separately)'
@@ -2477,8 +2576,8 @@ export function apply(ctx, config) {
         pid: Number(launch.pid) || 0,
         apiState: after.state,
         message: ok
-          ? `Started Gopeed (pid ${launch.pid})${pidNote}; API ready: ${after.detail}.${confineText}`
-          : `Started Gopeed (pid ${launch.pid})${pidNote}, but the API was not ready within 10s (${after.state}: ${after.detail}). Gopeed may still be loading; check again with gopeed_process later.${confineText}`,
+          ? `Started Gopeed (pid ${launch.pid})${pidNote}; ready: ${after.detail}.${confineText}`
+          : `Started Gopeed (pid ${launch.pid})${pidNote}, but it did not answer within 15s (${after.state}: ${after.detail}). Gopeed may still be loading; check again with gopeed_process later.${confineText}`,
         ...launchSandbox,
       }
     },

@@ -8,7 +8,7 @@
   English | <a href="docs/README.zh.md">Chinese</a>
 </p>
 
-Turn a local **[Gopeed](https://gopeed.com/)** downloader into agent tools inside **DeepSeek Harness (DSH)**, with a settings page for the API host, port and token.
+Turn a local **[Gopeed](https://gopeed.com/)** downloader into agent tools inside **DeepSeek Harness (DSH)**: create and manage downloads, diagnose or launch the process, and receive download-complete events -- including a background job that can wake an idle agent. The REST tools work wherever Gopeed runs; process control is Windows-only.
 
 Downloads never pass through the model or a shell: the agent hands a URL to Gopeed over its loopback REST API (the port is auto-detected from the running process by default, and a token is sent as the `X-Api-Token` header when one is set), and Gopeed owns all outbound traffic and the files on disk.
 
@@ -23,10 +23,11 @@ Downloads never pass through the model or a shell: the agent hands a URL to Gope
 ## Features
 
 - **Seven tools** -- `gopeed_add`, `gopeed_list`, `gopeed_status`, `gopeed_control` (pause / resume / remove through an `action` enum), `gopeed_process` (is Gopeed alive, stuck or misconfigured -- also reports the version and webhook status), `gopeed_launch` (start it if it is not running), and `gopeed_events` (read the download-complete events Gopeed pushed, or write the webhook config in `auto` mode). No tool can restart or kill Gopeed.
-- **Small system-prompt footprint** -- the model-facing `{name, description, parameters}` of all seven tools is 1217 characters (roughly 305 tokens at about 4 characters per token), down from 2714 across nine tools. See [System-prompt footprint](#system-prompt-footprint).
-- **Settings page in the DSH Web UI** -- host, port, token, request timeout, an optional executable path, the port scan switch and the three webhook fields. Every field is *volatile*: saving applies immediately, with no plugin remount and no DSH restart. The token is a secret field, so the browser only ever sees "set" / "not set", never the value back. A version badge shows the loaded browser bundle next to the backend version reported by `gopeed_process`.
+- **Small system-prompt footprint** -- the model-facing `{name, description, parameters}` of all seven tools is 1343 characters (roughly 336 tokens at about 4 characters per token), down from 2714 across nine tools. See [System-prompt footprint](#system-prompt-footprint).
+- **A download location policy, not a hidden default** -- `downloadTarget` selects `workspace` (the calling session's directory, the default), `gopeed` (whatever directory Gopeed itself is configured to use) or `custom` (`customDownloadPath`). An explicit `path` argument always wins. When the chosen target cannot be resolved, the download falls back to Gopeed's directory and `gopeed_add` says so in `jobNote`; the tool also reads the task back, so `path` reports where the file actually went.
+- **Settings page in the DSH Web UI** -- the download location, the Gopeed listen address, port and token, an optional executable path and the webhook block (mode, port, toast). Three further schema settings, `timeoutMs`, `portScan` and `webhookNotify`, are **not rendered by this form** and are config-only. Every form field is *volatile*: saving applies immediately, with no plugin remount and no DSH restart. The token is a secret field, so the browser only ever sees "set" / "not set", never the value back. A version badge shows the loaded browser bundle next to the backend version reported by `gopeed_process`.
 - **Download wake-up** -- `gopeed_add` registers a DSH background job that follows the new task and settles when the download ends. That settlement becomes DSH's **own** completion notice: a busy agent reads it in its next step, and an **idle agent is woken with a follow-up turn**. The notice text belongs to the harness -- the plugin never writes a user-role message. See [Download wake-up](#download-wake-up-background-jobs).
-- **Download-complete notifications** -- Gopeed pushes `DOWNLOAD_DONE` / `DOWNLOAD_ERROR` to a loopback listener, which feeds a bottom-right toast, and -- for a download no background job covers -- a one-line context note for the agent. Neither writes a chat message. See [Download notifications](#download-notifications-webhook).
+- **Download-complete notifications** -- Gopeed pushes `DOWNLOAD_DONE` / `DOWNLOAD_ERROR` to a loopback listener, which can feed an opt-in bottom-right toast (`webhookToast`) and -- for a download no background job covers -- a one-line context note for the agent. Neither writes a chat message. See [Download notifications](#download-notifications-webhook).
 - **One restart path, and it belongs to the user** -- the red **Restart Gopeed** button on the settings page. It force-kills the process, waits until the pid is really gone, starts Gopeed again and waits for its API. It does not touch the webhook config. No agent tool can reach it.
 - **Honest diagnostics instead of guesses** -- `gopeed_process` returns one of `running`, `unresponsive`, `misconfigured`, `stopped`, `unauthorized` or `unknown`, and never reports "not running" when the process probe itself was blocked.
 - **Reachable without reading docs** -- when a tool hits a connection, timeout or token failure, it appends a one-time setup notice to **its own output** (see [Guiding the user](#guiding-the-user)), instead of assuming anyone opened this file. Nothing is ever posted into the conversation on the user's behalf.
@@ -90,17 +91,22 @@ Installing an absolute directory records a `link:` dependency, so the profile's 
 
 Open the sidebar **Plugins -> Installed -> Gopeed Downloader -> row `gopeed` -> Configure**.
 
+The form renders the download location, its optional custom path, the listen address, port, token, executable path and three webhook controls (mode, port and toast). `timeoutMs`, `portScan` and `webhookNotify` exist in the schema but have no control on that page; set them in the active profile's `cordis.patch.yml` under `id: gopeed` (for example `portScan: true`).
+
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `host` | string | `127.0.0.1` | Listen address from Gopeed -> Settings -> Advanced -> Protocol (TCP). |
+| `downloadTarget` | enum `workspace` / `gopeed` / `custom` | `workspace` | Where a `gopeed_add` download is saved. `workspace` = the calling session's own directory; `gopeed` = leave the path unset so Gopeed uses its configured download directory; `custom` = use `customDownloadPath`. An explicit `path` argument to `gopeed_add` always wins. |
+| `customDownloadPath` | string | *(empty)* | Absolute download directory used when `downloadTarget` is `custom`; surrounding whitespace is trimmed. When empty, the download falls back to Gopeed's directory. Ignored for the other targets. |
+| `host` | string | `127.0.0.1` | Gopeed listen address (the one from Gopeed -> Settings -> Advanced -> Protocol, TCP). **IP or hostname only**: a pasted `http://...` or `127.0.0.1:9999` is rejected up front, and a bare IPv6 literal must be written in brackets (`[::1]`). |
 | `port` | number | `0` | `0` = auto-detect: ask Windows which port the running Gopeed process holds. Set a number only to pin one, and pin the same fixed port in Gopeed first (see below). |
 | `token` | string (secret) | *(empty)* | Gopeed ships with an empty token (= auth disabled), so the default matches. If you set one in Gopeed, enter the identical value here. |
 | `timeoutMs` | number | `20000` | Per-request HTTP timeout, in milliseconds. |
-| `exePath` | string | *(empty)* | Leave blank in almost every case; only portable or non-standard installs need it. See [Launching Gopeed](#launching-gopeed). |
-| `portScan` | boolean | `false` | Off by default. When enabled, the plugin may sweep the local dynamic port range to find Gopeed when Windows refuses to reveal another process's sockets. That touches ports owned by unrelated software, so it is opt-in only. |
+| `exePath` | string | *(empty)* | Leave blank in almost every case; only portable or non-standard installs need it. Must be the full path to a real `.exe` file: a directory or a non-executable file is rejected and falls back to auto-discovery. See [Launching Gopeed](#launching-gopeed). |
+| `portScan` | boolean | `false` | **Config-only; the form has no switch for it.** Off by default. When enabled in the profile config, the plugin may sweep the local dynamic port range to find Gopeed when Windows refuses to reveal another process's sockets. That touches ports owned by unrelated software, so it is opt-in only. |
 | `webhookMode` | enum `off` / `manual` / `auto` | `off` | Download-complete push. `off` listens on no port; `manual` listens and shows the URL you add in Gopeed yourself; `auto` listens too, and lets `gopeed_events action=apply` write that URL into Gopeed's config. See [Download notifications](#download-notifications-webhook). |
-| `webhookPort` | number | `0` | Loopback port for `manual` / `auto`, range 0-65535. `0` = the system picks a free port (the URL then changes across restarts); a concrete number keeps the URL stable, which is what makes a one-time paste into Gopeed work. |
-| `webhookNotify` | boolean | `true` | When a download finishes, show the bottom-right toast and queue one line of context for the agent. Needs `manual` or `auto`. It never posts into the chat and never wakes an idle agent; set it to `false` to keep events cache-only. |
+| `webhookPort` | number | `0` | Loopback port for `manual` / `auto`, range 0-65535. `0` = the system picks a free port (the URL then changes across restarts); a concrete number keeps the URL stable, which is what makes a one-time paste into Gopeed work. The form exposes this field in `manual` mode only; `auto` reuses the stored value. |
+| `webhookNotify` | boolean | `true` | **Config-only; the form has no switch for it.** With a listener on, a finished download queues one line of context for the agent, and (when `webhookToast` is on) shows the toast. It never posts into the chat and never wakes an idle agent; set it to `false` in the profile config to keep events cache-only. |
+| `webhookToast` | boolean | `false` | Show the plugin's own bottom-right toast. **Off by default** because Gopeed already posts its own Windows notification, so the plugin toast duplicates it; enable it only for the extra detail (name, size, path). It gates the user-facing toast only -- job wake-up, the `Agent.inject` fallback and the `gopeed_events` cache are unaffected. |
 
 ### The port: pin it in Gopeed, or let the plugin detect it
 
@@ -128,7 +134,7 @@ A live "request base URL" preview shows `http://host:port` above the form. Savin
 
 | Tool | Parameters | Returns | Purpose |
 |---|---|---|---|
-| `gopeed_add` | `url` (required), `path`, `name` | `taskId`, `url`, `name`, `path`, `baseUrl`, `jobId`, `jobNote` | Create a download task. `path` is the save directory; `name` is an optional display name (Gopeed otherwise derives one from the URL). `jobId` is the background job tracking this download (empty when the host cannot host one), and `jobNote` then says why. |
+| `gopeed_add` | `url` (required), `path`, `name` | `taskId`, `url`, `name`, `path`, `baseUrl`, `jobId`, `jobNote` | Create a download task. `path` is an optional explicit save directory; when omitted, `downloadTarget` decides (see [Where a download is saved](#where-a-download-is-saved)). `name` is an optional display name (Gopeed otherwise derives one from the URL). `path` in the result is the **actual** save directory, read back from Gopeed. `jobId` is the background job tracking this download (empty when the host cannot host one), and `jobNote` then says why -- it also carries any download-path fallback note. |
 | `gopeed_list` | `status` (optional: `ready`/`running`/`pause`/`wait`/`error`/`done`) | `count` + normalized task array | List all tasks, optionally filtered. |
 | `gopeed_status` | `id` | one normalized task | Progress of a single task. |
 | `gopeed_control` | `id` + `action` (`pause`/`resume`/`remove`), optional `force` | `{ ok, id, action, status, message }` | Pause, resume or delete. |
@@ -148,6 +154,24 @@ A normalized task looks like this:
   "sizeKnown": true, "speedBytesPerSec": 1048576,
   "path": "D:\\Downloads", "createdAt": "..." }
 ```
+
+### Where a download is saved
+
+Save location is decided in this order, first match wins:
+
+1. an explicit `path` argument to `gopeed_add`;
+2. the calling session's workspace directory, when `downloadTarget` is `workspace` (the default);
+3. `customDownloadPath`, when `downloadTarget` is `custom` and the field is not empty;
+4. otherwise the path is left unset and **Gopeed** uses the download directory from its own settings.
+
+The fallbacks are reported, never silent. When `workspace` cannot be resolved (the host does not expose
+`session.header.cwd`) or `custom` is selected with an empty path, the download still goes to Gopeed's
+directory and `jobNote` says which fallback happened.
+
+`gopeed_add` also reads the created task back once: Gopeed fills `meta.opts.path` with the real directory
+even when no path was sent, so the returned `path` is where the file actually lands rather than an echo of
+the caller's argument (possibly empty). That read-back is best-effort -- a failed GET does not fail an add
+Gopeed already accepted.
 
 ## Download notifications (webhook)
 
@@ -225,24 +249,30 @@ A finished download can reach the agent through three channels, and none of them
    `dsh-tool-jobs` turns that settlement into an in-session completion notice (busy agent: next step; idle
    agent: woken with a follow-up turn). The notice belongs to the harness, so nothing is authored in the
    user's voice. See [Download wake-up](#download-wake-up-background-jobs).
-2. **The bottom-right toast -- always, and human-facing.** It is rendered by the plugin's own client half. The
-   page polls an authenticated `GET /api/dsh-gopeed/notifications` route; each toast disappears after 6
-   seconds. It never marks the receiver buffer as read, so `gopeed_events` still reports the same unread
-   count.
+2. **The bottom-right toast -- opt-in, and human-facing.** Off by default (`webhookToast`), because Gopeed
+   already posts its own Windows notification and the plugin toast would duplicate it. When enabled it is
+   rendered by the plugin's own client half: the page polls an authenticated
+   `GET /api/dsh-gopeed/notifications` route, and each toast disappears after 6 seconds. It never marks the
+   receiver buffer as read, so `gopeed_events` still reports the same unread count.
 3. **`Agent.inject` -- the fallback, for a completion no job covers.** That means a download started in the
    Gopeed UI or by another client, or any download on a host whose composition has no `ctx.jobs`. The same
    summary is queued as model-facing context for the agent's **next** pre-step; it does **not** wake the
    agent and is never rendered as a chat message. A task a job owns is deliberately **not** injected: both
    channels carried the same completion, and a real session showed the model reading it twice.
 
-`webhookNotify` (default on) controls channels 2 and 3. Channel 1 follows `gopeed_add` and needs no webhook
-at all, so a download started by the agent is still reported when `webhookMode` is `off`.
+`webhookNotify` (default on) gates channels 2 and 3, but channel 2 additionally needs `webhookToast` on.
+Channel 1 follows `gopeed_add` and needs no webhook at all, so a download started by the agent is still
+reported when `webhookMode` is `off`.
+
+The settings page puts the whole webhook block into a **collapsed drawer**, whose summary line shows the
+current mode. A duty note stays visible: wake-up is handled by a DSH background task and does **not**
+depend on the webhook, which is only an optional enhancement.
 
 **The plugin never posts messages into the conversation.** The old `Agent.followup` and
 `ToolRunContext.deferContext` paths are gone: both delivered plugin text as a `role: 'user'` message, which made it
 look as if the user had typed it. Guidance now travels inside the tool's own output; download notices use the
 channels above, and the waking one is DSH's, not the plugin's. Set `webhookNotify: false` to keep webhook
-events cache-only (channel 1 is unaffected).
+events cache-only (channel 1 is unaffected); leaving `webhookToast` off removes only the toast.
 
 ### Restarting Gopeed
 
@@ -251,7 +281,7 @@ interrupts downloads in progress. It only stops and starts the process:
 
 1. force-kill the running Gopeed (`taskkill /F`) and wait until its pid is actually gone from the process table;
 2. start Gopeed again;
-3. wait up to 10 seconds for its API to answer.
+3. wait up to 15 seconds for its API to answer, re-detecting the port as it goes.
 
 **The button does not write webhook config.** Registering the listener URL is a separate step: `gopeed_events`
 with `action: "apply"` in `auto` mode, or your own manual entries in `manual` mode.
@@ -267,7 +297,9 @@ background job** (`kind: 'gopeed'`, id `gopeed-<16 hex>`), and DSH reports it wh
 
 What that means in practice:
 
-- `gopeed_add` returns `jobId`, and its own output names the job together with the matching `job_output` call.
+- `gopeed_add` returns `jobId`, and its own output names the job together with the matching `job_output` call
+  and says explicitly **not to poll** for progress. Only when no job could be started does the output suggest
+  polling `gopeed_status` instead.
 - The job polls the Gopeed task every 3 seconds. While the task is `pause` or `wait` it slows to every 30
   seconds: a paused download is not progress, and polling it hard buys nothing.
 - On completion the job settles as `completed` with the file size in the detail; on a Gopeed `error` status as
@@ -338,7 +370,8 @@ gopeed_launch    # start it if stopped; do nothing if already running
 Steps 3-5 share **one** PowerShell call (`Get-Process` plus `Get-ItemProperty` plus `WScript.Shell`) and only run when step 2 missed. The result is cached in process memory and recomputed if the cached path disappears.
 
 - **Nothing found?** The tools do not guess: `gopeed_process.advice` and `gopeed_launch.message` list every location that was tried and ask you to either install Gopeed or set the executable path for a portable build.
-- **Launch** uses `spawn(exePath, { detached: true, stdio: 'ignore' }).unref()` -- a detached process with no console and no blocking, effectively a double-click. Afterwards the plugin polls the API for up to 10 seconds to confirm readiness.
+- **Launch** uses `spawn(exePath, { detached: true, stdio: 'ignore' }).unref()` -- a detached process with no console and no blocking, effectively a double-click. Afterwards the plugin polls the API for up to 15 seconds to confirm readiness.
+- **It re-detects the port while it waits.** A freshly started Gopeed comes up on a new random port (the desktop default is `0`), and that port only appears once the process starts listening. The confirmation loop therefore re-runs detection and probes every ~700 ms within the 15-second budget, instead of probing one stale port for the whole wait -- the same fix the restart path uses.
 - **It probes the resolved port, not the raw config value.** With `port` at `0` the raw value is not a dialable port; probing it used to conclude "not running" and launch a second instance. The check now uses the port detection result, so an already-running Gopeed is left alone.
 - **No pid, no pretence.** If the process list cannot be read, the restart path says that it needs a pid it cannot obtain and gives manual steps instead of reporting success.
 - **It cannot restart anything.** There is no `restart` parameter any more. For a stuck process, send the user to the settings page's **Restart Gopeed** button.
@@ -403,24 +436,27 @@ Layout: `package.json` (bundle manifest), `cordis.patch.yml` (inserts one row, `
 
 ### System-prompt footprint
 
-DSH projects every tool's `{name, description, parameters}` into the system prompt on each turn (`output.schema` and `render` do not), so that text is a permanent cost. Measured on the 0.2.0 build, nine historical entry points having become seven tools:
+DSH projects every tool's `{name, description, parameters}` into the system prompt on each turn (`output.schema` and `render` do not), so that text is a permanent cost. Measured on the 0.3.0 build, nine historical entry points having become seven tools:
 
 | Tool (before) | Characters | Tool (after) | Characters |
 |---|---:|---|---:|
-| `gopeed_add` | 508 | `gopeed_add` | 214 |
-| `gopeed_list` | 311 | `gopeed_list` | 180 |
-| `gopeed_status` | 232 | `gopeed_status` | 139 |
+| `gopeed_add` | 508 | `gopeed_add` | 256 |
+| `gopeed_list` | 311 | `gopeed_list` | 191 |
+| `gopeed_status` | 232 | `gopeed_status` | 155 |
 | `gopeed_pause` + `gopeed_resume` + `gopeed_remove` | 728 | `gopeed_control` (merged) | 268 |
-| `gopeed_info` + `gopeed_process` | 581 | `gopeed_process` (merged) | 82 |
-| `gopeed_launch` | 354 | `gopeed_launch` | 109 |
+| `gopeed_info` + `gopeed_process` | 581 | `gopeed_process` (merged) | 114 |
+| `gopeed_launch` | 354 | `gopeed_launch` | 134 |
 | -- | -- | `gopeed_events` (new) | 225 |
-| **9 tools total** | **2714** | **7 tools total** | **1217 (-55%)** |
+| **9 tools total** | **2714** | **7 tools total** | **1343 (-51%)** |
 
-What changed: three verbs collapsed into one `action` enum, `gopeed_info` folded into `gopeed_process`, `gopeed_launch` lost its `restart` parameter, descriptions cut to a fragment that never repeats the `gopeed_` prefix, parameter descriptions dropped except `path` (a wrong "file instead of directory" would silently download to the wrong place), and `additionalProperties: false` left out of the parameter schemas to match the shape `defineTool` produces (validation happens in `execute` instead). The one piece of meaning that cannot live in a name -- `force` deletes files -- is carried by `gopeed_control`'s description. The schema skeleton (names, `required` arrays, enum values) is deliberately untouched: it is what DSH validates, so shrinking it further would drop parameters, not characters. **No download capability was removed** -- only the entry points were consolidated. The measured total is **1217 characters, 117 over the original 1100 target**: `gopeed_events` accounts for 225 of them, and the rest of the overage is the deliberate decision to keep `name`, both value enums and the `required` arrays, because hiding a real parameter or a legal value costs more in wrong calls than those characters save. The names in the left column (`gopeed_pause`, `gopeed_resume`, `gopeed_remove`, `gopeed_info`) are historical and no longer exist as tools.
+What changed: three verbs collapsed into one `action` enum, `gopeed_info` folded into `gopeed_process`, `gopeed_launch` lost its `restart` parameter, descriptions cut to a fragment that never repeats the `gopeed_` prefix, parameter descriptions dropped except `path` (a wrong "file instead of directory" would silently download to the wrong place), and `additionalProperties: false` left out of the parameter schemas to match the shape `defineTool` produces (validation happens in `execute` instead). The one piece of meaning that cannot live in a name -- `force` deletes files -- is carried by `gopeed_control`'s description. The schema skeleton (names, `required` arrays, enum values) is deliberately untouched: it is what DSH validates, so shrinking it further would drop parameters, not characters. **No download capability was removed** -- only the entry points were consolidated. The measured total is **1343 characters, 243 over the original 1100 target**: `gopeed_events` accounts for 225 of them, the 0.3.0 description rewrites added 126, and the rest of the overage is the deliberate decision to keep `name`, both value enums and the `required` arrays, because hiding a real parameter or a legal value costs more in wrong calls than those characters save. The names in the left column (`gopeed_pause`, `gopeed_resume`, `gopeed_remove`, `gopeed_info`) are historical and no longer exist as tools.
 
 The download wake-up in 0.3.0 cost **zero** prompt characters: `gopeed_add` gained `jobId` / `jobNote` in its
-`output.schema` only, and that schema is not projected into the system prompt. Its `parameters` are untouched, so
-the total is still **1217**.
+`output.schema` only, and that schema is not projected into the system prompt. Its `parameters` are untouched.
+What did raise the total was a separate 0.3.0 change: five descriptions (`gopeed_add`, `gopeed_list`,
+`gopeed_status`, `gopeed_process`, `gopeed_launch`) were rewritten from terse fragments into a clear
+capability statement, adding 126 characters and taking the total from **1217 to 1343**. Download paths,
+host validation, launch behaviour and the toast switch add no prompt text of their own.
 
 ## Known limitations
 
@@ -428,7 +464,7 @@ the total is still **1217**.
 2. **Webhook delivery depends on Gopeed applying its config after a full restart.** Until then the GUI may show stale values, and no event will arrive. The plugin cannot tell "not enabled in Gopeed" apart from "enabled but not restarted"; both look like zero events received.
 3. **Events are in-memory.** The ring buffer holds 50 entries and is emptied by a plugin reload or a DSH restart. Nothing is written to disk.
 4. **The settings form's visual layout is unverified.** The data path (slot key, `form.state` / `mutate`, field projection, token redaction) is tested; the styling is inline CSS nobody has looked at in a browser.
-5. **BT / magnet tasks are tested lightly.** A Debian 13.7 netinst ISO magnet was verified end to end: the metadata resolved to 756 MB, the transfer started at about 4 MB/s, and the tracking job followed it. Harder cases -- a magnet with no peers, DHT-only discovery, a private tracker, or resuming a magnet after a restart -- are still unverified. A missing `meta.res` degrades to `sizeKnown: false` rather than an invented percentage.
+5. **BT / magnet tasks are lightly tested.** A Debian 13.7 netinst ISO magnet was verified end to end: the metadata resolved to 756 MB, the transfer started at about 4 MB/s, and the tracking job followed it. Harder cases -- a magnet with no peers, DHT-only discovery, a private tracker, or resuming a magnet after a restart -- are still unverified. A missing `meta.res` degrades to `sizeKnown: false` rather than an invented percentage.
 6. **`remove` is idempotent.** Gopeed 1.9.3 answers a `DELETE` for an unknown id with success, so deleting twice still reports "removed".
 7. **Readiness after a restart is inferred by polling the API,** so a Gopeed that already serves requests while still showing a loading screen is reported ready early. Harmless.
 8. **The webhook listener binds loopback only.** A Gopeed running in Docker, or on another machine, cannot push to it without extra networking.

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Gopeed Downloader",
-    "description": "Adds Gopeed download tasks, tracks progress, and pauses, resumes, or removes them. Configure the API host, port, and token on its configuration page."
+    "description": "Adds Gopeed download tasks, tracks progress, and pauses, resumes, or removes them. Also picks the save location, and can wake an idle agent when a download finishes."
   }
 }
