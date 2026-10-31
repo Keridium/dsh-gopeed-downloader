@@ -1806,15 +1806,27 @@ export function apply(ctx, config) {
       const taskName = optString(args?.name)
       try {
         const taskId = await client.create({ url, path: path || undefined, name: taskName || undefined })
+        // Read the task back: when `path` is omitted, Gopeed does NOT leave the save dir empty -- it
+        // fills meta.opts.path with the downloadDir from its own settings. Reporting the caller's
+        // empty argument would leave the agent with no idea where the file landed. One loopback GET.
+        let resolvedPath = path
+        let resolvedName = taskName
+        try {
+          const created = normalizeTask(await client.get(taskId))
+          if (created && created.path) resolvedPath = created.path
+          if (!resolvedName && created && created.name) resolvedName = created.name
+        } catch {
+          // Read-back is best-effort: the add itself already succeeded.
+        }
         // Registration happens AFTER Gopeed accepted the task, so a rejected add never leaves a job
         // tracking a download that does not exist. A missing/unusable job service degrades to
         // jobId '' plus the one-line note, and gopeed_add still succeeds.
-        const tracked = startDownloadJob(exec, { taskId, name: taskName, url })
+        const tracked = startDownloadJob(exec, { taskId, name: resolvedName, url })
         return {
           taskId,
           url,
-          name: taskName,
-          path,
+          name: resolvedName,
+          path: resolvedPath,
           baseUrl: client.baseUrl(),
           jobId: tracked.jobId,
           jobNote: tracked.note,
