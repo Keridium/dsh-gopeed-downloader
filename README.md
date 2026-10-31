@@ -297,7 +297,8 @@ file-access sandbox. Which one applied is always reported, never assumed:
 | Action | Confined? |
 |---|---|
 | Read-only diagnosis: `tasklist`, `Get-Process`, `netstat`, `Get-NetTCPConnection`, `netsh`, reading files, calling Gopeed's loopback API | **No** -- it only looks. A confined shell often cannot see other processes at all, which would make the diagnosis worthless |
-| Starting or stopping Gopeed: `gopeed_launch` and the config-page **Restart Gopeed** button | **Yes** -- through `ctx.sandbox.confine`, under the session's file policy |
+| Starting Gopeed from an agent tool: `gopeed_launch` | **Yes** -- through `ctx.sandbox.confine`, under the calling session's file policy |
+| Stopping or restarting Gopeed from the config-page **Restart Gopeed** button | **No** -- it is a user gesture, not an agent action. The sandbox bounds what the agent may do; applying it here produced a confined `taskkill` that could not end a same-user process |
 
 Every result says which one happened:
 
@@ -305,7 +306,8 @@ Every result says which one happened:
   permissions. This says nothing about whether Gopeed is running; only the API verdict does
 - `launchSandboxed` / `sandboxMode` / `sandboxDetail` on `gopeed_launch` and on the restart route
 
-Three cases for start and stop:
+Three cases for `gopeed_launch` (the config-page button always runs unconfined and reports
+`launchSandboxed: false` with a detail line saying it was a user-triggered action):
 
 | Case | Behaviour |
 |---|---|

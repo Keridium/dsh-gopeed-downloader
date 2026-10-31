@@ -9,6 +9,28 @@ project README lives in [docs/README.zh.md](docs/README.zh.md).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-31
+
+### Fixed
+
+- **The config-page "Restart Gopeed" button was killed by the sandbox.** That route has no agent
+  session, so the policy resolved to the deployment default (`workspace-write`) and `taskkill` was
+  wrapped in a restricted token, which cannot end a same-user process: the button always failed with
+  `the sandbox may have denied the kill`. The button is a user gesture, not an agent action, so it now
+  runs unconfined and reports that honestly (`launchSandboxed: false`, `sandboxMode: ""`,
+  `sandboxDetail` saying it was user-triggered). `gopeed_launch` keeps using the calling session's
+  policy.
+- **A successful restart reported failure.** Gopeed returns on a new random port, and the port was
+  detected once, immediately after launch -- before the relaunched process started listening. The
+  plugin then probed that stale port for the full budget and reported
+  `its API was not ready within 10s` although the restart had worked. Detection and probing now run
+  in a loop for up to 15 seconds, switching to the newly detected port as soon as it appears.
+
+### Changed
+
+- The README sandbox table now states that only `gopeed_launch` is confined, and that the restart
+  button is a user action.
+
 ## [0.2.0] - 2026-10-31
 
 ### Added

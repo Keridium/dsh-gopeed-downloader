@@ -483,7 +483,7 @@ export function apply(ctx, config) {
         ? `The sandbox refused to run ${action}: the "${policy.mode}" mode has no usable backend on ` +
           `this host (SANDBOX_UNAVAILABLE). Nothing was started or stopped. Repair the sandbox ` +
           `backend (or switch the file policy to danger-full-access) and retry, or ${manual}. ` +
-          'The config page Restart button uses this same sandbox, so it cannot bypass the refusal.'
+          'The config-page Restart button is a user action and is NOT confined by this sandbox, so it can still restart Gopeed.'
         : `The sandbox refused to run ${action} (${code}): ${asciiText(error?.message || error)}. ` +
           `Nothing was started or stopped. Retry after the sandbox backend is repaired, or ${manual}.`
       return {
@@ -918,9 +918,20 @@ export function apply(ctx, config) {
    * @param {number} apiPort Port resolved before the restart, used when re-detection fails.
    */
   const restartGopeed = async (apiPort) => {
-    // The config-page restart has no agent session, so the policy resolves to the deployment
-    // default. Both process actions still go through the same confiner as gopeed_launch.
-    const confine = makeConfiner(undefined)
+    // The config-page restart is a USER gesture, not an agent action. The sandbox bounds what the
+    // agent may do; applying the deployment default to a button the human just pressed produced a
+    // confined taskkill that could not end a same-user process, so the button silently failed.
+    // This path therefore runs unconfined and says so in its result.
+    const confine = async (argv) => ({
+      argv,
+      sandboxed: false,
+      status: 'user-action',
+      mode: '',
+      enforcement: '',
+      detail:
+        'Started or stopped from the settings-page button by the user, not by an agent tool; ' +
+        'no sandbox policy applies to a human-triggered action.',
+    })
     const giveUp = (stage, message, sandbox) => ({
       ok: false,
       launched: false,
@@ -967,18 +978,31 @@ export function apply(ctx, config) {
         launch.sandbox,
       )
     }
-    // An unpinned Gopeed comes back on a new random port, so drop the cached detection first.
+    // An unpinned Gopeed comes back on a new random port, and that port only becomes visible once
+    // the relaunched process starts listening. Detect and probe in a loop: a single detection right
+    // after launch usually runs before the socket exists and would leave us probing a stale port for
+    // the whole budget.
     autoPort = 0
     autoPortAt = 0
-    const redetected = await ensureApiPort(true)
-    const port = redetected || apiPort || Number(config.port.get()) || 0
-    const after = await processOps.waitForApi({
-      host: config.host.get(),
-      port,
-      token: config.token.get(),
-      timeoutMs: 3000,
-      waitMs: 10000,
-    })
+    const deadline = Date.now() + 15000
+    let port = apiPort || Number(config.port.get()) || 0
+    let after = { state: 'unknown', detail: 'not probed yet' }
+    for (;;) {
+      const detected = await ensureApiPort(true)
+      if (detected > 0) port = detected
+      if (port > 0) {
+        after = await processOps.waitForApi({
+          host: config.host.get(),
+          port,
+          token: config.token.get(),
+          timeoutMs: 2000,
+          waitMs: 1800,
+        })
+        if (after.state === 'ok') break
+      }
+      if (Date.now() >= deadline) break
+      await new Promise((resolve) => setTimeout(resolve, 700))
+    }
     const pid = Number(launch.pid) || 0
     const sandboxFacts = {
       launchSandboxed: Boolean(launch.sandbox?.sandboxed),
@@ -994,7 +1018,7 @@ export function apply(ctx, config) {
         pid,
         apiState: after.state,
         stage: 'api',
-        message: `Gopeed was restarted (pid ${pid})${pidNote} but its API was not ready within 10s (${after.state}: ${after.detail}). It may still be loading; check gopeed_process in a moment.`,
+        message: `Gopeed was restarted (pid ${pid})${pidNote} but its API was not ready within 15s (${after.state}: ${after.detail}). It may still be loading; check gopeed_process in a moment.`,
         ...sandboxFacts,
       }
     }
