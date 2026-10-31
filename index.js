@@ -1826,7 +1826,7 @@ export function apply(ctx, config) {
     // already pin the value down - except `path`, where "save directory" versus "file path" is a
     // silent, wrong-download kind of mistake.
     //
-    // Budget note: the seven tool definitions total 1415 characters, 315 over the original 1100
+    // Budget note: the seven tool definitions total 1452 characters, 352 over the original 1100
     // target. `name` and the value enums were restored deliberately - a shorter schema that hides
     // a real parameter or a legal value costs more in wrong calls than the characters save. See
     // the footprint section of README.md for the measured per-tool breakdown.
@@ -1836,7 +1836,7 @@ export function apply(ctx, config) {
       properties: {
         url: { type: 'string' },
         path: { type: 'string', description: 'Save dir (omit = use the configured location)' },
-        name: { type: 'string' },
+        name: { type: 'string', description: 'File name (optional)' },
       },
     },
     output: {
@@ -1844,7 +1844,7 @@ export function apply(ctx, config) {
         type: 'object',
         additionalProperties: false,
         // jobId / jobNote describe the optional background tracking job. They live in output.schema
-        // only, which is never projected into the system prompt, so the 1415-character tool
+        // only, which is never projected into the system prompt, so the 1452-character tool
         // definition budget is untouched (parameters are unchanged).
         required: ['taskId', 'url', 'name', 'path', 'baseUrl', 'jobId', 'jobNote'],
         properties: {

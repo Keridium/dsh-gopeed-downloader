@@ -371,7 +371,7 @@ entirely, because the jobs live inside the DSH process; the downloads keep runni
 </details>
 
 <details>
-<summary>System-prompt footprint: 1415 characters, and where the 315 comes from</summary>
+<summary>System-prompt footprint: 1452 characters, and where the 352 comes from</summary>
 
 DSH projects every tool's `{name, description, parameters}` into the system prompt on every turn
 (`output.schema` and `render` do not), so that text is a permanent cost. Measured on the current working tree
@@ -379,14 +379,14 @@ DSH projects every tool's `{name, description, parameters}` into the system prom
 
 | Tool (before) | Characters | Tool (after) | Characters |
 |---|---:|---|---:|
-| `gopeed_add` | 508 | `gopeed_add` | 322 |
+| `gopeed_add` | 508 | `gopeed_add` | 359 |
 | `gopeed_list` | 311 | `gopeed_list` | 191 |
 | `gopeed_status` | 232 | `gopeed_status` | 155 |
 | `gopeed_pause` + `gopeed_resume` + `gopeed_remove` | 728 | `gopeed_control` (merged) | 268 |
 | `gopeed_info` + `gopeed_process` | 581 | `gopeed_process` (merged) | 110 |
 | `gopeed_launch` | 354 | `gopeed_launch` | 134 |
 | -- | -- | `gopeed_events` (new) | 235 |
-| **9 tools total** | **2714** | **7 tools total** | **1415 (-48%)** |
+| **9 tools total** | **2714** | **7 tools total** | **1452 (-47%)** |
 
 Three verbs collapsed into one `action` enum, `gopeed_info` folded into `gopeed_process`, `gopeed_launch` lost
 its `restart` parameter, descriptions were cut to a fragment that never repeats the `gopeed_` prefix, parameter
@@ -397,10 +397,10 @@ happens in `execute`). The one meaning that cannot live in a name -- `force` del
 untouched: that is what DSH validates, so shrinking it further would drop parameters, not characters. **No
 download capability was removed** -- only the entry points were consolidated.
 
-The measured total is **1415 characters, 315 over the original 1100 target**. The breakdown, so the arithmetic
+The measured total is **1452 characters, 352 over the original 1100 target**. The breakdown, so the arithmetic
 is checkable: before `gopeed_events` existed the six other tools sat 118 characters *under* the 1100 target, so
 `gopeed_events` is a net 235 - 118 = 117; the 0.3.0 description rewrites added 122; a later background-job
-wording change added 39; the save-directory parameter hint added 37; 117 + 122 + 39 + 37 = 315. The download wake-up cost **zero** prompt characters -- `jobId` /
+wording change added 39; the save-directory parameter hint added 37; the file-name hint added 37; 117 + 122 + 39 + 37 + 37 = 352. The download wake-up cost **zero** prompt characters -- `jobId` /
 `jobNote` live in `output.schema` only. The names in the left column (`gopeed_pause`, `gopeed_resume`,
 `gopeed_remove`, `gopeed_info`) are historical and no longer exist as tools.
 

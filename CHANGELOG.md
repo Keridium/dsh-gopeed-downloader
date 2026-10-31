@@ -11,6 +11,12 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
 
 ### Changed
 
+- **A wrong token was reported as a generic error instead of as a wrong token.** Gopeed 1.9.3 answers HTTP
+  401 when the token is wrong; the probe only treated 403 as `unauthorized` and let 401 fall through to
+  `error`. That broke two things: `gopeed_process` could not reach its `unauthorized` verdict, so the advice
+  pointed at the port rather than the token, and `discoverApiPort` -- which deliberately keeps a port whose
+  probe says `unauthorized`, because that proves a Gopeed is listening there -- gave up on the one port that
+  was actually right. Both status codes now map to `unauthorized`.
 - **Two user-facing strings still said "API".** The project keeps that word out of anything a person or a model
   reads, but the "port unknown" error still said `the API port is unknown` and one diagnosis line in
   `gopeed_process` said `the verdict relies on the API`. They now say "listen port" and "HTTP probe". Found by
@@ -54,7 +60,7 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
   `Download a URL through Gopeed. Returns a background job that notifies when it ends.` (+29 characters), and the
   output note says the job *runs in the background*, to *not poll and not wait*, and to read the result *after
   the notice* -- the previous "Read it with job_output" read like an instruction to block on it.
-- **Prompt footprint re-measured: 1339 to 1415 characters** (+76: the two descriptions above plus 37 for the save-directory parameter hint). The 0.3.0 figure
+- **Prompt footprint re-measured: 1339 to 1452 characters** (+113: the two descriptions above, plus 37 for the save-directory hint and 37 for the file-name hint). The 0.3.0 figure
   previously recorded as 1343 was 4 characters high because `gopeed_process` measured 114 instead
   of its real 110; every baseline is now taken from a fresh measurement of the loaded tools.
 
