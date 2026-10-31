@@ -11,6 +11,11 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
 
 ### Changed
 
+- **A failed call now says what a wrong token means.** Gopeed answers `code=1001 msg=unauthorized`, which
+  names neither the cause nor the fix, so a `gopeed_add` against a mis-set token produced one opaque line.
+  `GopeedApiError` now appends "-- the token is wrong; set it in the plugin settings (gopeed_process explains
+  it)" for 401, 403, 1001 and for any message that mentions unauthorized or forbidden. Task-gone (1000) and
+  transport failures (-1) are untouched, because their wording is already actionable.
 - **A wrong token was reported as a generic error instead of as a wrong token.** Gopeed 1.9.3 answers HTTP
   401 when the token is wrong; the probe only treated 403 as `unauthorized` and let 401 fall through to
   `error`. That broke two things: `gopeed_process` could not reach its `unauthorized` verdict, so the advice
