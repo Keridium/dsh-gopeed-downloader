@@ -9,14 +9,14 @@
 
 - **6 个工具**：`gopeed_add` / `gopeed_list` / `gopeed_status` / **`gopeed_control`**（暂停/继续/删除）/
   **`gopeed_process`**（进程+API 诊断+版本）/ **`gopeed_launch`**（启动/重启）
-- **进 system prompt 的常驻开销只有约 1100 字符**（约 270 token）：工具名 + 一行英文描述 + 极简参数；
-  返回正文仍是中文。合并与精简过程见「六、实测记录」
-- **工具自己会找人**：检测到 Gopeed 没装/没配好时，会直接在会话里追加一条中文分步说明
-  （`deferContext`），不依赖用户去翻文档，也只发一次
-- 只走回环（默认 `127.0.0.1:9999`），鉴权头 `X-Api-Token`，出网下载由 Gopeed 自己负责
+- **进 system prompt 的常驻开销只有 1029 字符**（约 257 token）：工具名 + 一段英文短语描述 + 极简参数；
+  工具返回的正文同样是英文（工具输出也属于 agent 可见内容）。合并与精简过程见「六、实测记录」
+- **工具自己会找人**：检测到 Gopeed 没装/没配好时，会直接在会话里追加一条英文分步说明
+  （`deferContext`；这段文字属于 agent 可见内容，按语言策略用英文），不依赖用户去翻文档，也只发一次
+- 只走回环（插件约定 `127.0.0.1:9999`，**不是 Gopeed 的默认值**——桌面版出厂是 `127.0.0.1:0`，即每次启动随机端口）；端口默认填 `0` 表示由插件向 Windows 询问真实端口，也可以先在 Gopeed 里钉死一个固定端口；鉴权头 `X-Api-Token`（Token 出厂为空 = 不鉴权），出网下载由 Gopeed 自己负责
 - 实测环境：Gopeed **1.9.3**、DSH **web** profile（已装好并在运行）、DSH 自带 Node **v24**
 - **不依赖用户机器上的 Node**：插件作为 cordis 插件跑在 DSH 主进程里，由 DSH 自带的运行时执行；
-  子进程只用 Windows 自带的 `tasklist` / `taskkill` / `powershell.exe`（Windows PowerShell 5.1 即可，**不需要 pwsh 7**），
+  子进程只用 Windows 自带的 `tasklist` / `taskkill` / `powershell.exe` / `netstat` / `netsh`（Windows PowerShell 5.1 即可，**不需要 pwsh 7**），
   全程 0 处调用 `node` / `npm` / `npx` / `pnpm`
 
 ---
@@ -36,15 +36,16 @@ dsh-gopeed/
    └─ @deepseek-ai/{schemastery,cosmokit}
 ```
 
-配置项写在 **`index.js` 的 `Config`**（schemastery schema）里，五个字段全部 `.volatile()`：
+配置项写在 **`index.js` 的 `Config`**（schemastery schema）里，六个字段全部 `.volatile()`：
 
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `host` | string | `127.0.0.1` | Gopeed 设置 → 高级 → 协议（TCP）的监听地址 |
-| `port` | number | `9999` | 同上，端口 |
-| `token` | string | `deepseek` | Gopeed 设置 → 高级 → Token |
+| `port` | number | `0` | `0` = 自动检测：向 Windows 问出正在运行的 Gopeed 实际占用的端口。填数字才是钉死；`9999` 是**插件约定值，不是 Gopeed 默认**（Gopeed 新装是端口 `0`，每次启动随机），钉死前要先去 Gopeed 里把端口改成同一个数 |
+| `token` | string | **空** | Gopeed 的 API Token。Gopeed 出厂为空（不鉴权），所以默认留空；你在 Gopeed 里设了什么，这里就填一模一样的 |
 | `timeoutMs` | number | `20000` | 单次 HTTP 请求超时（毫秒） |
 | `exePath` | string | **空** | 可执行文件路径。**一般不用填**：留空时先找 Gopeed 默认安装路径，找不到再自动发现（见「五」）；只有绿色版/非标准安装才需要手填 |
+| `portScan` | boolean | `false` | **默认关闭**。打开后允许插件扫本机动态端口范围来定位 Gopeed（Windows 不肯透露别的进程的端口时用得上）。会碰到无关软件的端口，属于有侵入性的可选项，接受才开 |
 
 `.volatile()` 是关键：**只有 volatile 字段才会出现在设置表单里，并且改完即时生效（不重挂插件、不用重启 DSH）**。
 `token` 还带 `role('secret')`，读取链路里会被抹掉，前端只能看到「已设置 / 未设置」，不会回显明文。
@@ -61,7 +62,7 @@ dsh-gopeed/
 
 `install_bundle` 的 `target` 还可以填 **git URL**（如 `https://github.com/owner/dsh-gopeed`，
 需要机器上有 `git`，装前会先跑一次 `git ls-remote` 探活）或 **tarball URL**
-（如 `.../archive/refs/tags/v0.1.0.tar.gz`，走压缩包、**不需要 git**）。相对路径会被拒绝，必须是绝对路径。
+（如 `.../archive/refs/tags/v0.1.1.tar.gz`，走压缩包、**不需要 git**）。相对路径会被拒绝，必须是绝对路径。
 
 卸载同理：`plugin_manager` 的 `remove_bundle`，`target` 填 `dsh-gopeed`，然后重启 DSH。
 
@@ -80,11 +81,17 @@ dsh-gopeed/
 
 **侧栏「插件」→「已安装」→ `Gopeed 下载器` → 行 `gopeed` → 「配置」**
 
+> ⚠️ **端口的两种走法。** Gopeed 桌面版出厂监听 `127.0.0.1:0`——端口 `0` 表示**每次启动随机分配一个端口**。
+> 插件默认端口也是 `0`，意思是「自己去问 Windows 现在这个 Gopeed 占的是哪个端口」，通常不用配就能通。
+> 如果自动检测拿不到（权限受限，或进程探测不可用），就打开 Gopeed 的 **设置 → 高级 → 协议**，
+> 把地址改成固定值（例如 `127.0.0.1:9999`），再在插件里填同一个端口数字。
+> （1.9.3 的协议选项只有 **TCP** / **Unix socket**，没有 HTTP；也没有「启用 API」开关，API 一直开着。）
+
 | 界面标签 | 字段 | 填什么 |
 |---|---|---|
 | **地址** | `host` | `127.0.0.1` |
-| **端口** | `port` | `9999` |
-| **Token** | `token` | `deepseek`（和 Gopeed 里一致；密码框，留空 = 不修改） |
+| **端口** | `port` | `0`（**默认，自动检测**）；或在 Gopeed 里钉了固定端口时，填**同一个数字**（例如 `9999`） |
+| **Token** | `token` | **留空即可**（Gopeed 出厂不鉴权）；若你在 Gopeed 里设过 Token，就填一模一样的值（密码框，留空 = 不修改） |
 | **程序路径（可选）** | `exePath` | **留空即可**，插件会自动找到 Gopeed.exe |
 
 Token 框留空就不会写回，旧 Token 保持有效。上方有实时的 `当前请求地址 http://host:port` 预览。
@@ -118,15 +125,20 @@ Token 框留空就不会写回，旧 Token 保持有效。上方有实时的 `�
 
 ## 五、Gopeed 卡了怎么办
 
-先让 agent 跑 **`gopeed_process`**，它给五种结论：
+先让 agent 跑 **`gopeed_process`**，它给六种结论：
 
 | verdict | 含义 | 该怎么办 |
 |---|---|---|
 | `running` | API 正常响应 | 没事，正常用 |
 | `unresponsive` | **端口通但没响应**（进程活着但卡住） | `gopeed_launch` 加 `restart=true` |
-| `stopped` | 连接被拒绝（没启动） | `gopeed_launch`（等价双击图标） |
+| `misconfigured` | **进程在跑，但当前端口上没人应答**：程序没问题，端口不对 | 去 Gopeed「设置 → 高级 → 协议」看固定端口，填进插件配置；或把插件端口填 `0` 让插件自动检测 |
+| `stopped` | 连接被拒绝，且进程也没查到（没启动） | `gopeed_launch`（等价双击图标） |
 | `unauthorized` | 进程好的，Token 不对 | 去配置页改 Token |
 | `unknown` | 端口/地址不对 | 检查地址、端口、Gopeed 的协议设置 |
+
+`misconfigured` 是为了修掉过去的误判：进程明明在跑、只是端口对不上时，报 `stopped` 会让你去启动一个已经启动的程序。它只在**进程探测确实能看到进程**时才会出现；探测被环境挡住时，结论仍以 API 证据为准。
+
+**端口自动检测与 `portScan`**：端口填 `0` 时，插件先向 Windows 问「这个 `Gopeed.exe` 占用了哪些端口」（`netstat -ano`，不行再用 `Get-NetTCPConnection`）。两条路都拿不到时，自检会如实说明端口无法确定并让你手填。配置项 `portScan`（**默认关闭**）就是为这种情况准备的：打开后插件会扫本机动态端口范围，逐个用 `/api/v1/info` 探测。因为它会连到与本插件无关的软件端口，属于**有侵入性的可选项**，默认不开。两条路都拿不到时，最后的兜底是约定端口 `9999`；那里也没人应答，插件就如实报错，不再继续猜。
 
 `gopeed_process` 会同时给进程信息：能不能查到进程、pid、内存占用。**注意区分**：
 `processProbe` 为 `unavailable` 时表示当前环境拿不到进程列表（权限受限），
@@ -173,44 +185,48 @@ gopeed_launch {restart:true}  # 先结束进程再启动（救卡死）
 **6 个工具全部真实调用过**，其中进程/启动相关：
 
 ```
-gopeed_process → verdict=running  API: ok(5ms)  Gopeed 1.9.3 正常响应
-                 进程: Gopeed.exe 在跑, pid 已脱敏, 内存 136 MB   ← probe=ok，真的查到了
-                 可执行文件: %LOCALAPPDATA%\Programs\Gopeed\Gopeed.exe（默认安装路径）
-                                                                 ← exePath 配的是空，全靠自动查找
-gopeed_launch  → alreadyRunning=true, launched=false
-                 "Gopeed 已经在运行，没有重复启动。要救卡死的进程请加 restart=true。"
+gopeed_process -> verdict=running  API: ok(5ms)  Gopeed 1.9.3 responded normally
+                  Process: Gopeed.exe is running, pid <hidden>, 136 MB   <- probe=ok，真的查到了
+                  Executable: %LOCALAPPDATA%\Programs\Gopeed\Gopeed.exe (default install path)
+                                                                          <- exePath 留空，全靠自动查找
+gopeed_launch  -> alreadyRunning=true, launched=false
+                  "Gopeed is already running (...); not starting it again. Add restart=true to recover a stuck process."
 ```
+
+（上面的输出原文是英文——工具返回文本属于 agent 可见内容，按语言策略一律英文。）
 
 其余：`gopeed_process`（返回 1.9.3 / windows / amd64 + 安装路径）、`gopeed_list`（正确读 `meta.res.size` 算进度）、
 `gopeed_add` → `gopeed_status` → `gopeed_control`（pause / resume / remove）完整闭环，
 `code:1000 task not found` 被识别成「无需暂停」而不抛错，错路径启动报 `ENOENT`，空端口报 `stopped`。
 
-### 工具常驻开销：2714 → 1096 字符（约 1140 → 270 token）
+### 工具常驻开销：2714 → 1029 字符（约 1140 → 257 token）
 
 DSH 每轮都会把每个工具的 `{name, description, parameters}` 投影进 system prompt（`output.schema`
 和 render 不进），所以这部分是纯常驻成本。优化前后：
 
 | 工具（合并前） | 字符 | 工具（合并后） | 字符 |
 |---|---:|---|---:|
-| `gopeed_add` | 508 | `gopeed_add` | 239 |
-| `gopeed_list` | 311 | `gopeed_list` | 187 |
-| `gopeed_status` | 232 | `gopeed_status` | 145 |
-| `gopeed_pause` + `gopeed_resume` + `gopeed_remove` | 728 | `gopeed_control`（合并） | 283 |
-| `gopeed_info` + `gopeed_process` | 581 | `gopeed_process`（合并） | 105 |
-| `gopeed_launch` | 354 | `gopeed_launch` | 137 |
-| **合计 9 个工具** | **2714** | **合计 6 个工具** | **1096（−60%）** |
+| `gopeed_add` | 508 | `gopeed_add` | 214 |
+| `gopeed_list` | 311 | `gopeed_list` | 180 |
+| `gopeed_status` | 232 | `gopeed_status` | 139 |
+| `gopeed_pause` + `gopeed_resume` + `gopeed_remove` | 728 | `gopeed_control`（合并） | 268 |
+| `gopeed_info` + `gopeed_process` | 581 | `gopeed_process`（合并） | 98 |
+| `gopeed_launch` | 354 | `gopeed_launch` | 130 |
+| **合计 9 个工具** | **2714** | **合计 6 个工具** | **1029（−62%）** |
 
 做法：9 → 6 个工具（`pause/resume/remove` 合并成一个带 `action` 枚举的 `gopeed_control`，
-`info` 并入 `gopeed_process`）、描述压成一行英文、参数描述几乎全删（靠名字和枚举自解释）、
+`info` 并入 `gopeed_process`）、描述压成不重复 `gopeed_` 前缀的短语、参数描述只保留 `path`（否则容易把「目录」误传成「文件路径」），
 参数 schema 不写 `additionalProperties:false`（与 DSH 原生 `defineTool` 产出的形状一致，
-校验改在 `execute` 里做）。**功能没有删减**：所有能力都还在，只是入口收敛了。
+校验改在 `execute` 里做）。唯一不能靠参数名表达的语义——`force` 会连文件一起删——写在 `gopeed_control` 的描述里。
+名字、`required` 数组、枚举值这些 schema 骨架刻意没动：那才是 DSH 校验的东西，再压就只能删参数。
+**功能没有删减**：所有能力都还在，只是入口收敛了。
 上表左列的 `gopeed_pause` / `gopeed_resume` / `gopeed_remove` / `gopeed_info` 是历史工具名，现在已不存在。
 
 ### 检测到未就绪时，工具会主动找用户
 
 用户不一定会去翻文档。所以任何工具在遇到「连不上 / 超时 / Token 不对」时，
-会在结果之后用 `ToolRunContext.deferContext` 往会话里追加一条**中文分步说明**
-（装 Gopeed → 开 TCP 协议 → 对 Token），全生命周期**只发一次**，且注入失败不影响工具本身的报错。
+会在结果之后用 `ToolRunContext.deferContext` 往会话里追加一条**英文分步说明**
+（装 Gopeed → 在协议里固定端口 → 对齐 Token；英文是因为这段文字进的是 agent 上下文），全生命周期**只发一次**，且注入失败不影响工具本身的报错。
 任务级错误（比如对不存在的 id 操作，`code:1000`）**不会**触发这条提示，避免打扰。
 
 ### 一个必须知道的坑：沙箱 vs 插件运行环境
@@ -225,7 +241,7 @@ DSH 每轮都会把每个工具的 `{name, description, parameters}` 投影进 s
 
 ### 设置表单链路
 
-复用 `dsh-settings` 的 `redactSecrets()` 验证过：字段是 `host/port/token/timeoutMs/exePath`（全部 volatile），
+复用 `dsh-settings` 的 `redactSecrets()` 验证过：字段是 `host/port/token/timeoutMs/exePath/portScan`（全部 volatile），
 `token` 被标记为 `{"path":["token"],"set":true}` 且不出现在表单值里。
 
 ---
