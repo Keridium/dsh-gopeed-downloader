@@ -16,15 +16,15 @@ REST 类工具跨平台，进程控制仅支持 Windows。
 
 - **7 个工具**：`gopeed_add` / `gopeed_list` / `gopeed_status` / **`gopeed_control`**（暂停/继续/删除）/
   **`gopeed_process`**（进程 + API 诊断 + 版本 + Webhook 状态）/ **`gopeed_launch`**（只在没跑时启动）/
-  **`gopeed_events`**（读下载完成事件；auto 模式下可写 Webhook 配置）
-- **进 system prompt 的常驻开销只有 1343 字符**（约 336 token，按 4 字符/token 粗略折算）：7 个工具的「名字 + 一段英文短语描述 + 极简参数」；
+  **`gopeed_events`**（读下载完成事件；auto 模式下可保存 Webhook 配置）
+- **进 system prompt 的常驻开销只有 1378 字符**（约 344 token，按 4 字符/token 粗略折算）：7 个工具的「名字 + 一段英文短语描述 + 极简参数」；
   工具返回的正文同样是英文（工具输出也属于 agent 可见内容）。合并与精简过程见「七、实测记录」
 - **下载保存位置可选，不是藏起来的默认值**：`downloadTarget` 三选一——`workspace`（默认，当前会话的工作区目录）/
   `gopeed`（交给 Gopeed 自己的下载目录）/ `custom`（用 `customDownloadPath`）。agent 显式传 `path` 时永远以它为准。
   目标目录解析不出来时会回落到 Gopeed 的目录，并在 `gopeed_add` 返回的 `jobNote` 里说明；任务创建后还会回读一次，
   因此返回的 `path` 是**实际落盘目录**，不是把入参原样抄回来
 - **下载完成推送（Webhook）三模式**：`off`（默认，不监听）/ `manual`（插件监听，地址由你手动填进 Gopeed）/
-  `auto`（插件监听，且允许 `gopeed_events action=apply` 把地址写进 Gopeed 配置）。详见「五」
+  `auto`（插件监听，且允许 `gopeed_events action=apply` 把地址保存进 Gopeed 配置）。详见「五」
 - **下载完成自动唤醒（0.3.0）**：`gopeed_add` 会把这次下载注册成 **DSH 后台任务**（`kind: "gopeed"`），
   下载结束时任务 settle，由 DSH 官方 `dsh-tool-jobs` 发出**它自己的**完成通知：agent 忙就下一轮读到，
   agent 空闲就**开新一轮把它唤醒**。通知文字属于 harness，插件不写任何用户身份的消息
@@ -65,14 +65,14 @@ dsh-gopeed/
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `downloadTarget` | enum `workspace` / `gopeed` / `custom` | `workspace` | `gopeed_add` 把文件存到哪里。`workspace` = 当前会话自己的工作区目录；`gopeed` = 不传路径，让 Gopeed 用它在自己设置里配的下载目录；`custom` = 用 `customDownloadPath`。agent 显式传 `path` 时永远优先 |
-| `customDownloadPath` | string | **空** | `downloadTarget` 为 `custom` 时使用的绝对目录，首尾空白会被裁掉。为空时回落到 Gopeed 自己的目录；其它 target 下忽略 |
+| `customDownloadPath` | string | **空** | `downloadTarget` 为 `custom` 时使用的绝对目录，首尾空白会被裁掉。默认空，为空时回落到 Gopeed 自己的目录（配置页在输入框下方常驻说明这一点，placeholder 也写「留空 = Gopeed 默认目录」）；其它 target 下忽略 |
 | `host` | string | `127.0.0.1` | Gopeed 监听地址（Gopeed 设置 → 高级 → 协议（TCP）里的那个地址）。**只填 IP 或主机名**：粘成 `http://…` 或 `127.0.0.1:9999` 会被当场拒绝；裸 IPv6 要写成方括号形式 `[::1]` |
 | `port` | number | `0` | `0` = 自动检测：向 Windows 问出正在运行的 Gopeed 实际占用的端口。填数字才是钉死，且要先去 Gopeed 里把端口改成同一个数（Gopeed 新装是端口 `0`，每次启动随机，所以它没有「默认端口」） |
 | `token` | string | **空** | Gopeed 的 API Token。Gopeed 出厂为空（不鉴权），所以默认留空；你在 Gopeed 里设了什么，这里就填一模一样的 |
 | `timeoutMs` | number | `20000` | 单次 HTTP 请求超时（毫秒）。**配置页不渲染**，改 profile 的 `cordis.patch.yml` |
 | `exePath` | string | **空** | 可执行文件路径。**一般不用填**：留空时先找 Gopeed 默认安装路径，找不到再自动发现（见「六」）；只有绿色版/非标准安装才需要手填。必须指向真正的 `.exe` 文件，填目录或 `.ini` 之类会被拒绝并回落到自动发现 |
 | `portScan` | boolean | `false` | **配置页不渲染这个开关**。默认关闭；在 profile 配置里打开后，允许插件扫本机动态端口范围来定位 Gopeed（Windows 不肯透露别的进程的端口时用得上）。会碰到无关软件的端口，属于有侵入性的可选项，接受才开 |
-| `webhookMode` | enum `off` / `manual` / `auto` | `off` | 下载完成推送模式。`off` = 不监听任何端口；`manual` = 插件监听并显示地址，由你手动填进 Gopeed；`auto` = 同样监听，另外允许 `gopeed_events action=apply` 把地址写进 Gopeed 配置。详见「五」 |
+| `webhookMode` | enum `off` / `manual` / `auto` | `off` | 下载完成推送模式。`off` = 不监听任何端口；`manual` = 插件监听并显示地址，由你手动填进 Gopeed；`auto` = 同样监听，另外允许 `gopeed_events action=apply` 把地址保存进 Gopeed 配置。详见「五」 |
 | `webhookPort` | number | `0` | `manual` / `auto` 使用的回环端口，范围 0–65535。`0` = 由系统分配空闲端口（重启后地址会变）；填具体数字才能让地址固定，也才适合「一次填进 Gopeed 长期用」 |
 | `webhookNotify` | boolean | `true` | **配置页没有这个开关**。有监听时，下载完成会给 agent 留一行上下文；`webhookToast` 打开时还会弹右下角 toast。需要 `manual` 或 `auto` 才有事件；**不会**写进对话，也**不会**唤醒空闲的 agent。设为 `false` 则事件只进缓存（需改 profile 配置） |
 | `webhookToast` | boolean | `false` | 弹插件自己的右下角通知。**默认关闭**：Gopeed 自己已经会在 Windows 通知中心弹一条，插件再弹就是重复；想要更详细的信息（名称 / 大小 / 路径）才打开。它只影响给用户看的 toast——job 唤醒、`Agent.inject` 兜底和 `gopeed_events` 事件缓存都不受影响 |
@@ -125,13 +125,13 @@ dsh-gopeed/
 | 界面标签 | 字段 | 填什么 |
 |---|---|---|
 | **下载位置** | `downloadTarget` | 三选一：**工作区**（默认，当前会话目录）/ **Gopeed 默认目录** / **自定义**。选「自定义」时下面会多出「自定义路径」输入框（`customDownloadPath`） |
-| **自定义路径** | `customDownloadPath` | 只有选「自定义」时才出现。填一个绝对目录，例如 `D:\Downloads`；留空会回落到 Gopeed 自己的目录 |
-| **Gopeed 监听地址** | `host` | `127.0.0.1`。**只填 IP 或主机名**，不要带 `http://`，也不要带端口；裸 IPv6 要写成 `[::1]` |
-| **端口** | `port` | `0`（**默认，自动检测**）；或在 Gopeed 里钉了固定端口时，填**同一个数字**（例如 `9999`） |
-| **Token** | `token` | **留空即可**（Gopeed 出厂不鉴权）；若你在 Gopeed 里设过 Token，就填一模一样的值（密码框，留空 = 不修改） |
-| **程序路径（可选）** | `exePath` | **留空即可**，插件会自动找到 Gopeed.exe；手填时必须是 `.exe` 文件，不能是目录 |
+| **自定义路径** | `customDownloadPath` | 只有选「自定义」时才出现。默认空；留空 = 回落到 Gopeed 自己的目录，填一个绝对目录（例如 `D:\Downloads`）才是真正的自定义路径。输入框下方和 placeholder 都会写明这一点 |
+| **Gopeed 监听地址** | `host` | 默认 `127.0.0.1`，**必填**（留空会被拒绝保存）。**只填 IP 或主机名**，不要带 `http://`，也不要带端口；裸 IPv6 要写成 `[::1]` |
+| **端口** | `port` | 默认 `0` = **自动检测**；留空会被拒绝保存（要自动检测就填 `0`），在 Gopeed 里钉了固定端口时则填**同一个数字**（例如 `9999`） |
+| **Token** | `token` | 默认空 = 不发送 Token（Gopeed 出厂不鉴权）；若你在 Gopeed 里设过 Token，就填一模一样的值（密码框，留空 = 不修改已保存的 Token，这个表单也没有清空入口） |
+| **程序路径（可选）** | `exePath` | 默认空 = 自动查找，插件会自动找到 Gopeed.exe；手填时必须是 `.exe` 文件，不能是目录 |
 | **Webhook 推送（下载完成通知）** | `webhookMode` | 三选一：`off`（默认，不启用）/ `manual`（手动配置）/ `auto`（自动配置）。整块收在一个**默认折叠的抽屉**里，摘要行显示当前模式 |
-| **Webhook 监听端口** | `webhookPort` | `0` = 系统分配（每次可能不同）；想让地址固定下来、方便一次填进 Gopeed，就填一个具体数字（例如随机生成的 2 万多端口）。只在 `manual` 模式下显示 |
+| **Webhook 监听端口** | `webhookPort` | 默认 `0` = 系统分配空闲端口（每次可能不同），留空会被拒绝保存；想让地址固定下来、方便一次填进 Gopeed，就填一个具体数字（例如随机生成的 2 万多端口）。只在 `manual` 模式下显示 |
 | （表单无此控件） | `webhookNotify` | 默认开，但配置页上**没有开关**；要关闭只能改 profile 配置。它控制下载完成时给 agent 留不留上下文（toast 另有 `webhookToast`） |
 | （同属 Webhook 区块） | `webhookToast` | 默认关：打开后才会弹插件自己的右下角通知。只影响给人看的 toast，不影响 job 唤醒 |
 
@@ -153,7 +153,7 @@ Token 框留空就不会写回，旧 Token 保持有效。上方有实时的 `�
 | `gopeed_control` | `id` + `action`（`pause`/`resume`/`remove`），`remove` 可带 `force` | `{ok,id,action,status,message}` | 暂停 / 继续 / 删除 |
 | **`gopeed_process`** | 无 | 插件版本 + 诊断结论 + 版本 + 安装路径 + Webhook 状态 | **进程 + API 双重诊断；也是连通性/版本检查的入口** |
 | **`gopeed_launch`** | **无（空参数 `{}`）** | `{launched,alreadyRunning,pid,apiState,message}` | **只在没跑时启动**。它不能重启，也不能杀进程 |
-| **`gopeed_events`** | `since` 可选时间戳、`unreadOnly` 可选布尔、`action`（**只有 `apply`**） | `mode`、`listener`、`count`、`unread`、`events[]`、`applied`、`message` | 读 `DOWNLOAD_DONE` / `DOWNLOAD_ERROR` 事件；**仅 auto 模式**下 `action:"apply"` 会把监听地址写进 Gopeed 配置 |
+| **`gopeed_events`** | `since` 可选时间戳、`unreadOnly` 可选布尔、`action`（**只有 `apply`**） | `mode`、`listener`、`count`、`unread`、`events[]`、`applied`、`message` | 读 `DOWNLOAD_DONE` / `DOWNLOAD_ERROR` 事件；**仅 auto 模式**下 `action:"apply"` 会把监听地址保存进 Gopeed 配置 |
 
 > `gopeed_control` 的 `force` **默认 `true`**：直接删会连已下载的文件一起删；
 > 想保留文件要显式传 `force: false`。
@@ -195,7 +195,7 @@ Gopeed 在任务**完成或失败**时会主动 **POST** 一个事件（`DOWNLOA
 |---|---|---|
 | `off`（默认） | 不监听任何端口 | 没人；只能自己用 `gopeed_list` / `gopeed_status` 查 |
 | `manual` | 监听 `127.0.0.1:<webhookPort>` | **你本人**在 Gopeed 里手动填 |
-| `auto` | 同样监听 | 你明确要求时，由 `gopeed_events action=apply` 写入 |
+| `auto` | 同样监听 | 你明确要求时，由 `gopeed_events action=apply` 保存 |
 
 监听地址固定是 `http://127.0.0.1:<port>/webhook`，只绑回环。
 
@@ -213,21 +213,21 @@ Gopeed 在任务**完成或失败**时会主动 **POST** 一个事件（`DOWNLOA
 **只加地址、不打开开关，推送不会发出来。** 这是实测踩过的坑：列表里看起来已经配好了，插件却一条事件都收不到。
 `manual` 模式下插件**绝不**去改 Gopeed 的设置，这两步只能由你完成。
 
-### `auto`：插件替你写地址
+### `auto`：插件替你保存地址
 
-`gopeed_events` 传 `action:"apply"` 是插件里**唯一**会写 Gopeed 配置的代码路径，并且**只有 `auto` 模式允许**。它会：
+`gopeed_events` 传 `action:"apply"` 是插件里**唯一**会保存 Gopeed 配置的代码路径，并且**只有 `auto` 模式允许**。它会：
 
-1. 先读当前配置（`GET /api/v1/config`）——读失败就什么都不写；
+1. 先读当前配置（`GET /api/v1/config`）——读失败就什么都不保存；
 2. 只改 Webhook 字段：`webhook.enable = true`，并把监听地址**合并**进 `webhook.urls`（保留你已有的地址）；
 3. 把整个配置写回（`PUT /api/v1/config`）；
 4. **回读确认**：只有地址真的在配置里，才返回 `applied: true`。
 
-`apply` 只写配置，**不会顺手重启 Gopeed**。
+`apply` 只保存配置，**不会顺手重启 Gopeed**。
 
 ### 改完 Webhook 配置，必须「完全重启」Gopeed 才生效
 
 Gopeed 只在**完全重启**后才会应用 Webhook 配置。**关窗口到托盘不算重启**——进程还在，用的还是旧配置。
-GUI 里也可能一直显示旧值，所以「设置页看起来没变」并不代表写入失败。
+GUI 里也可能一直显示旧值，所以「设置页看起来没变」并不代表保存失败。
 
 **唯一的重启入口**是配置页上红色的 **「重启 Gopeed」** 按钮，它只做「杀掉并重新启动 Gopeed」这一件事：
 
@@ -235,7 +235,7 @@ GUI 里也可能一直显示旧值，所以「设置页看起来没变」并不�
 2. 重新启动 Gopeed；
 3. 轮询它的 API 最多 15 秒（期间不断重新检测端口），确认真的回来了。
 
-**这个按钮不写 Webhook 配置。** 把监听地址写进 Gopeed 是另一件事：`auto` 模式下由
+**这个按钮不保存 Webhook 配置。** 把监听地址保存进 Gopeed 是另一件事：`auto` 模式下由
 `gopeed_events action=apply` 完成，`manual` 模式下由你手动添加。
 
 按钮是红色、点击前有二次确认（会中断正在进行的下载）。
@@ -292,8 +292,9 @@ Webhook 事件就只进缓存（第 1 条不受影响）。
 
 实际行为：
 
-- `gopeed_add` 返回 `jobId`，它自己的输出里也会写明 `Tracking job: gopeed-…` 和对应的 `job_output` 调用，
-  并明确说**不要轮询**进度；只有没拿到 job 的分支才会建议改用 `gopeed_status` 查；
+- `gopeed_add` 返回 `jobId`，工具描述里就写明它跑在**后台**、结束时会给本会话发通知；它自己的输出里也会写明
+  `Tracking job: gopeed-…` 和对应的 `job_output` 调用，并明确说**不要轮询、也不用等**（通知到了再读）；
+  只有没拿到 job 的分支才会建议改用 `gopeed_status` 查；
 - 任务每 **3 秒**查一次 Gopeed；任务处于 `pause` / `wait` 时放慢到 **30 秒**一次——暂停的下载不是进展，
   全速轮询毫无收益；
 - 下载完成 → settle 为 `completed`，detail 带文件大小；Gopeed 报 `error` → `failed`；
@@ -417,36 +418,36 @@ gopeed_launch  -> alreadyRunning=true, launched=false
   开始下载约 4 MB/s、跟踪 job 能正常跟上结束。没有 peers 的磁力、只靠 DHT、私有 tracker、重启后继续
   磁力任务这些更难的场景仍未验证。
 
-### 工具常驻开销：2714 → 1343 字符（约 679 → 336 token，按 4 字符/token 粗略折算）
+### 工具常驻开销：2714 → 1378 字符（约 679 → 344 token，按 4 字符/token 粗略折算）
 
 DSH 每轮都会把每个工具的 `{name, description, parameters}` 投影进 system prompt（`output.schema`
-和 render 不进），所以这部分是纯常驻成本。9 个历史入口收敛成 7 个工具后（0.3.0 实测）：
+和 render 不进），所以这部分是纯常驻成本。9 个历史入口收敛成 7 个工具后（当前工作树实测，未发布）：
 
 | 工具（合并前） | 字符 | 工具（现在） | 字符 |
 |---|---:|---|---:|
-| `gopeed_add` | 508 | `gopeed_add` | 256 |
+| `gopeed_add` | 508 | `gopeed_add` | 285 |
 | `gopeed_list` | 311 | `gopeed_list` | 191 |
 | `gopeed_status` | 232 | `gopeed_status` | 155 |
 | `gopeed_pause` + `gopeed_resume` + `gopeed_remove` | 728 | `gopeed_control`（合并） | 268 |
-| `gopeed_info` + `gopeed_process` | 581 | `gopeed_process`（合并） | 114 |
+| `gopeed_info` + `gopeed_process` | 581 | `gopeed_process`（合并） | 110 |
 | `gopeed_launch` | 354 | `gopeed_launch` | 134 |
-| — | — | `gopeed_events`（新增） | 225 |
-| **合计 9 个工具** | **2714** | **合计 7 个工具** | **1343（−51%）** |
+| — | — | `gopeed_events`（新增） | 235 |
+| **合计 9 个工具** | **2714** | **合计 7 个工具** | **1378（−49%）** |
 
 做法：`pause/resume/remove` 合并成一个带 `action` 枚举的 `gopeed_control`，`info` 并入 `gopeed_process`，
 `gopeed_launch` 去掉 `restart` 参数，描述压成不重复 `gopeed_` 前缀的短语，参数描述只保留 `path`
 （否则容易把「目录」误传成「文件路径」），参数 schema 不写 `additionalProperties:false`
 （与 DSH 原生 `defineTool` 产出的形状一致，校验改在 `execute` 里做）。唯一不能靠参数名表达的语义
 ——`force` 会连文件一起删——写在 `gopeed_control` 的描述里。名字、`required` 数组、枚举值这些 schema 骨架刻意没动：
-那才是 DSH 校验的东西，再压就只能删参数。**下载能力没有删减**。实测合计 **1343 字符，比最早的 1100 目标多 243**：
-其中 `gopeed_events` 占 225，0.3.0 重写五条描述又加了 126，其余超支是刻意的取舍——保留 `name` 参数、两个枚举和
+那才是 DSH 校验的东西，再压就只能删参数。**下载能力没有删减**。实测合计 **1378 字符，比最早的 1100 目标多 278**：
+其中 `gopeed_events` 净增 117（235 减去其余六个工具原本比 1100 目标少的 118），0.3.0 重写五条描述又加了 122（早期误记为 126，重新实测后修正），后续的背景任务措辞修订又加了 39，117 + 122 + 39 = 278。其余取舍是刻意的——保留 `name` 参数、两个枚举和
 `required` 数组，因为把真实存在的参数或合法取值藏起来，比这些字符省下的代价更大（模型会传错）。
 上表左列的 `gopeed_pause` / `gopeed_resume` / `gopeed_remove` / `gopeed_info` 是历史工具名，现在已不存在。
 
 0.3.0 的「下载完成自动唤醒」**本身没有增加常驻开销**：`gopeed_add` 只在 `output.schema` 里多了 `jobId` / `jobNote`，
-而 `output.schema` 不进 system prompt；`parameters` 一个字没动。真正让总数从 **1217 涨到 1343** 的是另一项 0.3.0 改动：
+而 `output.schema` 不进 system prompt；`parameters` 一个字没动。真正让总数从 **1217 涨到 1339** 的是另一项 0.3.0 改动（后续措辞修订又加到 1378）：
 `gopeed_add` / `gopeed_list` / `gopeed_status` / `gopeed_process` / `gopeed_launch` 五条描述从原来的极短片段
-（如 `Create task.`）改成了说清「能做什么 + 边界」的一句话，合计 +126 字符。保存路径、host 校验、启动重探测和
+（如 `Create task.`）改成了说清「能做什么 + 边界」的一句话，合计 +122 字符。保存路径、host 校验、启动重探测和
 toast 开关都没有新增 prompt 文本。
 
 ### 检测到未就绪时，工具会主动找用户

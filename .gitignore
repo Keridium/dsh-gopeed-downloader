@@ -66,6 +66,9 @@ yarn.lock
 # -- Miscellaneous ------------------------------------------------------------
 # Directory used locally for drafts and screenshots during development
 scratch/
+# Screenshots taken for documentation. They are local working files: README
+# does not embed them, and the package whitelist never included them.
+screenshots/
 *.local
 .env
 .env.*

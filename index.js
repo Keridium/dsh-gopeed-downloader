@@ -179,7 +179,8 @@ export const Config = z.object({
     .default('127.0.0.1')
     .description(
       'Gopeed listen address: the IP or host name only, from Gopeed Settings -> Advanced -> Protocol (TCP). ' +
-        'Use 127.0.0.1 when it only listens locally. Do not add a scheme or a port (the port has its own field).',
+        'Use 127.0.0.1 when it only listens locally. Do not add a scheme or a port (the port has its own field). ' +
+        'The settings form requires it and rejects an empty value.',
     )
     .volatile(),
   port: z
@@ -191,7 +192,8 @@ export const Config = z.object({
     .description(
       'Gopeed listen port. 0 (default) = auto-detect: Gopeed\'s desktop build listens on 127.0.0.1:0, a random ' +
         'port per launch, so the plugin asks Windows which port the running process actually holds. Set a ' +
-        'number only to pin a specific port.',
+        'number only to pin a specific port. An empty port field in the settings form is rejected; type 0 explicitly ' +
+        'for auto-detect.',
     )
     .volatile(),
   token: z
@@ -201,7 +203,7 @@ export const Config = z.object({
     .description(
       'Gopeed token, sent as a request header. Gopeed ships with an EMPTY token, which disables auth; ' +
         'leave this blank to match. If you set a token in Gopeed -> Settings -> Advanced, enter the exact ' +
-        'same value here.',
+        'same value here. An empty field in the settings form keeps the saved token instead of clearing it.',
     )
     .volatile(),
   timeoutMs: z
@@ -236,8 +238,8 @@ export const Config = z.object({
     .default('off')
     .description(
       'Download-complete push events. off (default) = listen on no port at all. manual = listen and show the URL, ' +
-        'which you then add yourself in Gopeed -> Settings -> Advanced -> Webhook push. auto = listen too, and the ' +
-        'gopeed_events action=apply step may write that URL into Gopeed config when you explicitly ask for it.',
+        'which you then add yourself in Gopeed -> Settings -> Developer -> Webhook push. auto = listen too, and the ' +
+        'gopeed_events action=apply step may save that URL into Gopeed config when you explicitly ask for it.',
     )
     .volatile(),
   webhookPort: z
@@ -373,14 +375,14 @@ const EVENTS_RESULT_SCHEMA = {
   required: ['mode', 'action', 'listener', 'listening', 'count', 'unread', 'events', 'applied', 'message'],
   properties: {
     mode: { type: 'string', enum: ['off', 'manual', 'auto'], description: 'Webhook mode in effect.' },
-    action: { type: 'string', description: 'apply (config write); empty for a read.' },
+    action: { type: 'string', description: 'apply (config save); empty for a read.' },
     listener: { type: 'string', description: 'Listener URL; empty when nothing is listening.' },
     listening: { type: 'boolean', description: 'Whether the receiver is listening right now.' },
     count: { type: 'integer', description: 'Events returned by this call.' },
     unread: { type: 'integer', description: 'Events that were unread before this call.' },
     events: { type: 'array', items: EVENT_SCHEMA },
-    applied: { type: 'boolean', description: 'Whether Gopeed webhook config was written by this call.' },
-    listenerUrl: { type: 'string', description: 'URL written into Gopeed config (apply only).' },
+    applied: { type: 'boolean', description: 'Whether Gopeed webhook config was saved by this call.' },
+    listenerUrl: { type: 'string', description: 'URL saved into Gopeed config (apply only).' },
     message: { type: 'string', description: 'Human-readable result, or why nothing was done.' },
   },
 }
@@ -1371,7 +1373,7 @@ export function apply(ctx, config) {
   }
 
   // ---------------------------------------------------------------------------------------------
-  // Webhook receiver. This section only ever LISTENS. The single Gopeed config write in this
+  // Webhook receiver. This section only ever LISTENS. The single Gopeed config save in this
   // plugin lives in gopeed_events' action branch below, and it refuses to run outside mode auto.
   // ---------------------------------------------------------------------------------------------
 
@@ -1814,7 +1816,7 @@ export function apply(ctx, config) {
 
   ctx.tools.register({
     name: 'gopeed_add',
-    description: 'Download a URL through Gopeed. Returns a tracking job.',
+    description: 'Download a URL through Gopeed. Returns a background job that notifies when it ends.',
     // Note: parameters omits additionalProperties. A defineTool-compiled parameter schema is
     // only {type, properties, required}; adding additionalProperties:false would cost about 170
     // characters across the tools on every turn. Validation lives in execute (reqString /
@@ -1824,7 +1826,7 @@ export function apply(ctx, config) {
     // already pin the value down - except `path`, where "save directory" versus "file path" is a
     // silent, wrong-download kind of mistake.
     //
-    // Budget note: the seven tool definitions total 1217 characters, 117 over the original 1100
+    // Budget note: the seven tool definitions total 1378 characters, 278 over the original 1100
     // target. `name` and the value enums were restored deliberately - a shorter schema that hides
     // a real parameter or a legal value costs more in wrong calls than the characters save. See
     // the footprint section of README.md for the measured per-tool breakdown.
@@ -1842,7 +1844,7 @@ export function apply(ctx, config) {
         type: 'object',
         additionalProperties: false,
         // jobId / jobNote describe the optional background tracking job. They live in output.schema
-        // only, which is never projected into the system prompt, so the 1217-character tool
+        // only, which is never projected into the system prompt, so the 1378-character tool
         // definition budget is untouched (parameters are unchanged).
         required: ['taskId', 'url', 'name', 'path', 'baseUrl', 'jobId', 'jobNote'],
         properties: {
@@ -1866,7 +1868,7 @@ export function apply(ctx, config) {
           value.name ? `Name: ${value.name}` : undefined,
           value.path ? `Save dir: ${value.path}` : undefined,
           value.jobId
-            ? `Tracking job: ${value.jobId}. A completion notice reaches this session when the download ends; do not poll for progress. Read it with job_output ${value.jobId}.`
+            ? `Tracking job: ${value.jobId} runs in the background. A completion notice arrives in this session when the download ends - do not poll and do not wait for it. Read the result with job_output ${value.jobId} after the notice.`
             : value.jobNote,
           // jobNote also carries a path fallback (for example an unavailable session workspace),
           // which matters even when the tracking job started successfully.
@@ -2588,7 +2590,7 @@ export function apply(ctx, config) {
   // ---------------------------------------------------------------------------------------------
 
   /**
-   * Write the listener URL into Gopeed config. This is the ONLY config write in the plugin and it
+   * Save the listener URL into Gopeed config. This is the ONLY config save in the plugin and it
    * is reachable only through gopeed_events with an explicit action= argument, after the mode check.
    * Restarting is intentionally NOT part of this tool: it would let an agent kill the downloader.
    * The config page's "Restart Gopeed" button owns that action now.
@@ -2600,16 +2602,16 @@ export function apply(ctx, config) {
     const action = 'apply'
     if (mode !== 'auto') {
       throw new Error(
-        `Refused: action=${action} writes Gopeed config and is only allowed in webhookMode auto (current mode: ${mode}). ` +
-          'In manual mode you add the listener URL to Gopeed yourself under Settings -> Advanced -> Webhook push; ' +
-          'off mode listens on no port at all. Nothing was written.',
+        `Refused: action=${action} saves Gopeed config and is only allowed in webhookMode auto (current mode: ${mode}). ` +
+          'In manual mode you add the listener URL to Gopeed yourself under Settings -> Developer -> Webhook push; ' +
+          'off mode listens on no port at all. Nothing was saved.',
       )
     }
     const active = await ensureReceiver()
     if (!active) {
       throw new Error(
         `Cannot register the webhook URL: the listener is not running (${receiverFailure || 'unknown reason'}). ` +
-          'Fix webhookPort and retry; nothing was written to Gopeed.',
+          'Fix webhookPort and retry; nothing was saved to Gopeed.',
       )
     }
     const listenerUrl = active.url
@@ -2622,7 +2624,7 @@ export function apply(ctx, config) {
     }
     if (!current || typeof current !== 'object' || Array.isArray(current)) {
       throw new Error(
-        'Cannot register the webhook URL: Gopeed returned no usable config object, so nothing was written.',
+        'Cannot register the webhook URL: Gopeed returned no usable config object, so nothing was saved.',
       )
     }
     const previous = current.webhook && typeof current.webhook === 'object' ? current.webhook : {}
@@ -2636,7 +2638,7 @@ export function apply(ctx, config) {
       await client.updateConfig(next)
     } catch (error) {
       throw new Error(
-        `Writing Gopeed config failed: ${error?.message || String(error)}. ` +
+        `Saving Gopeed config failed: ${error?.message || String(error)}. ` +
           'Treat Gopeed config as unchanged unless you check it; nothing else was modified.',
       )
     }
@@ -2664,7 +2666,7 @@ export function apply(ctx, config) {
     }
     if (!applied) {
       result.message =
-        'Gopeed accepted the write but reading the config back did not show this URL' +
+        'Gopeed accepted the save but reading the config back did not show this URL' +
         (readBack ? ` (read-back failed: ${readBack})` : '') +
         '. Treat the change as unconfirmed and check Gopeed -> Settings -> Advanced manually.'
       return result
@@ -2720,16 +2722,16 @@ export function apply(ctx, config) {
       message:
         `Listening at ${active.url} (mode ${mode}): ${events.length} event(s) returned, ${unread} were unread ` +
         'before this call. Events are kept in a 50-entry buffer and are marked read once returned. If nothing ' +
-        'arrives, confirm that URL is registered in Gopeed -> Settings -> Advanced -> Webhook push.',
+        'arrives, confirm that URL is registered in Gopeed -> Settings -> Developer -> Webhook push.',
     }
   }
 
   ctx.tools.register({
     name: 'gopeed_events',
     // Definition budget (see gopeed_add's note): this description is deliberately terse.
-    // `apply` only writes the webhook fields; restarting Gopeed is not available to any tool.
-    description: 'Events; apply writes webhook config.',
-    // `since` / `unreadOnly` filter the read. `action` is the explicit, user-initiated write.
+    // `apply` only saves the webhook fields; restarting Gopeed is not available to any tool.
+    description: 'Events; action=apply saves the webhook config.',
+    // `since` / `unreadOnly` filter the read. `action` is the explicit, user-initiated save.
     parameters: {
       type: 'object',
       properties: {
@@ -2743,7 +2745,7 @@ export function apply(ctx, config) {
       render: (_args, value) => {
         if (value.action) {
           return textBlock([
-            `Gopeed webhook config written: ${value.applied ? 'yes' : 'no'}`,
+            `Gopeed webhook config saved: ${value.applied ? 'yes' : 'no'}`,
             `Listener: ${value.listener || '(none)'}`,
             value.message,
           ])
@@ -2772,14 +2774,14 @@ export function apply(ctx, config) {
         }
         if (value.count === 0) {
           lines.push(
-            'No events yet. Confirm the listener URL above is added in Gopeed -> Settings -> Advanced -> Webhook push.',
+            'No events yet. Confirm the listener URL above is added in Gopeed -> Settings -> Developer -> Webhook push.',
           )
         }
         lines.push('Returned events are marked read.')
         return textBlock(lines)
       },
     },
-    // Writes Gopeed config on the action branch and marks events read, so never concurrent.
+    // Saves Gopeed config on the action branch and marks events read, so never concurrent.
     isConcurrencySafe: () => false,
     presentCall: (args) => ({
       card: 'generic',

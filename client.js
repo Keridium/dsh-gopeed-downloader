@@ -52,20 +52,22 @@ window.__ModuleLoader__.load({
       summary: 'Gopeed 下载器：新建 / 列表 / 查进度 / 暂停 / 继续 / 删除，地址与 Token 可在这里配置。',
       title: '连接设置',
       downloadTarget: '下载位置',
-      downloadTargetHint: '工作区 = 当前会话的目录；Gopeed 默认 = 由 Gopeed 设置决定；自定义 = 你自己填。',
+      downloadTargetHint: '默认：工作区（= 当前会话的目录）。Gopeed 默认 = 由 Gopeed 设置决定；自定义 = 你自己填，路径留空则落回 Gopeed 默认目录。',
       downloadTargetWorkspace: '工作区',
       downloadTargetGopeed: 'Gopeed 默认目录',
       downloadTargetCustom: '自定义',
       customDownloadPath: '自定义路径',
-      customDownloadPathPlaceholder: '例如 D:\\Downloads',
+      customDownloadPathPlaceholder: '留空 = Gopeed 默认目录',
+      customDownloadPathHint:
+        '默认：空；留空 = 使用 Gopeed 默认下载目录（由 Gopeed 自己的设置决定），填了才是真正的自定义路径。',
       host: 'Gopeed 监听地址',
-      hostHint: '只填 IP 或主机名，例如 127.0.0.1；不要带 http://，也不要带端口（端口填在下面）。这个地址在 Gopeed 的 设置 → 高级 → 协议（TCP）里。',
+      hostHint: '默认：127.0.0.1。必填，不能留空（留空会被拒绝保存）。只填 IP 或主机名，例如 127.0.0.1；不要带 http://，也不要带端口（端口填在下面）。这个地址在 Gopeed 的「设置 → 高级 → 协议（TCP）」里。',
       port: '端口',
-      portHint: '默认 0：由插件自动检测正在运行的 Gopeed 占用的端口；如果在 Gopeed 里固定了端口，这里就填同一个数字（例如 9999）。',
+      portHint: '默认：0 = 由插件自动检测正在运行的 Gopeed 占用的端口。留空会被拒绝保存（要自动检测就填 0）；如果在 Gopeed 里固定了端口，这里就填同一个数字（例如 9999）。',
       token: 'Token',
-      tokenHint: 'Gopeed 设置 → 高级 → Token，插件会把它放在请求头里。',
+      tokenHint: '默认：空。还没保存过 Token 时，留空 = 不发送 Token（Gopeed 出厂不鉴权）；已经保存过时，留空 = 不改动它（本表单没有清空入口）。Token 在 Gopeed 的「设置 → 高级 → Token」，插件把它放在请求头里。',
       exe: '程序路径（可选）',
-      exeHint: '留空即可：插件先找 Gopeed 的默认安装路径，找不到再依次从「运行中的进程 → 注册表 → 开始菜单/桌面快捷方式 → 常见路径」自动查找。都没有才需要手填（绿色版/非标准安装）。',
+      exeHint: '默认：空 = 自动查找。插件先找 Gopeed 的默认安装路径，找不到再依次从「运行中的进程 → 注册表 → 开始菜单/桌面快捷方式 → 常见路径」自动查找。都没有才需要手填（绿色版/非标准安装）。',
       exePlaceholder: '留空 = 自动查找（推荐）',
       tokenSet: '已设置（留空表示不修改）',
       tokenUnset: '未设置',
@@ -74,14 +76,13 @@ window.__ModuleLoader__.load({
       saving: '保存中…',
       saved: '已保存，配置即时生效（volatile 字段，无需重启）。',
       noChanges: '没有改动。',
-      rejected: 'DSH 拒绝了这次写入，请刷新页面后重试。',
+      rejected: 'DSH 拒绝了这次保存，请刷新页面后重试。',
       failed: '保存失败',
       hostRequired: '地址不能为空。',
       portInvalid: '端口必须是 0–65535 之间的整数（0 = 自动检测）。',
       loading: '正在读取配置…',
       unavailable: '配置表单当前不可用（Host 没有暴露这个插件的设置）。',
       verify: '保存后可以让 agent 调用 gopeed_process 确认连通性。',
-      webhook: 'Webhook 推送（下载完成通知）',
       webhookHint: '下载完成后由 Gopeed 推送到插件；插件只在本地监听端口，不会主动发起网络请求。',
       webhookPushOptional: 'Webhook 推送（可选）',
       webhookDrawerExpand: '展开',
@@ -90,18 +91,18 @@ window.__ModuleLoader__.load({
       webhookDutyWake: '「下载完成自动唤醒 agent」不依赖 webhook：它由 DSH 的后台任务负责，不配 webhook 也照样能用。',
       webhookDutyPush: 'webhook 只是可选增强：不配也能自动唤醒、也能用 gopeed_list 查任务；配了才有推送类能力——右下角 toast 通知、gopeed_events 的事件缓存，以及某个下载没有被 job 跟踪时的 Agent.inject 兜底。',
       webhookDutySlower: '它不会让唤醒更快：唤醒由后台任务负责，和 webhook 无关。',
-      webhookDutyRestart: '配置后必须完全退出并重启 Gopeed 才生效（只把窗口关到托盘不算重启）。',
+      webhookDutyRestart: '保存后必须完全退出并重启 Gopeed 才生效（只把窗口关到托盘不算重启）。',
       webhookModeOff: 'off — 默认，不启用',
       webhookModeOffHint: '不监听任何端口；下载完成后需要你自己调用 gopeed_list 查询状态。',
       webhookModeManual: 'manual — 手动配置',
       webhookModeManualHint: '插件在本地监听端口；把下方状态区显示的完整地址添加到 Gopeed 的「设置 → 开发者 → Webhook 推送」，并确认「启用 Webhook」开关已打开。',
-      webhookModeAuto: 'auto — 自动配置',
-      webhookModeAutoHint: '插件会自动把监听地址写进 Gopeed 的配置；写入后要重启 Gopeed 才会生效。',
+      webhookModeAuto: 'auto — 由 agent 保存',
+      webhookModeAutoHint: 'auto 不会自己动手：只有明确让 agent 调用 gopeed_events（action=apply），地址才会被保存进 Gopeed 的配置；在这一页点「保存」只改插件自己的设置。保存后要重启 Gopeed 才生效。',
       webhookPort: 'Webhook 监听端口',
-      webhookPortHint: '填一个 0–65535 的整数：0 = 由系统自动分配空闲端口（每次可能不同），填具体数字则固定使用它。',
+      webhookPortHint: '默认：0 = 由系统自动分配空闲端口（每次可能不同）。填一个 0–65535 的整数；留空会被拒绝保存；填具体数字则固定使用它。',
       webhookPortRandom: '随机生成',
       webhookToast: '右下角通知',
-      webhookToastHint: 'Gopeed 自己会在 Windows 通知中心弹一条。这里打开的话插件也会弹一条内容更详细的（名称 / 大小 / 路径），但会和 Gopeed 那条重复：想要详细信息就打开，嫌吵就关着。这个开关只影响给用户看的 toast，不影响 job 唤醒（后台任务）、Agent.inject 兜底和 gopeed_events 事件缓存。',
+      webhookToastHint: '默认：关闭。Gopeed 自己会在 Windows 通知中心弹一条。这里打开的话插件也会弹一条内容更详细的（名称 / 大小 / 路径），但会和 Gopeed 那条重复：想要详细信息就打开，嫌吵就关着。这个开关只影响给用户看的 toast，不影响 job 唤醒（后台任务）、Agent.inject 兜底和 gopeed_events 事件缓存。',
       webhookPortInvalid: 'Webhook 端口必须是 0–65535 之间的整数（0 = 自动分配）。',
       webhookStatus: 'Webhook 状态',
       webhookStatusMode: '当前模式',
@@ -112,8 +113,8 @@ window.__ModuleLoader__.load({
       webhookManualStep: '把上面的地址添加到 Gopeed → 设置 → 开发者 → Webhook 推送，然后确认这一页的「启用 Webhook」开关已经打开（只加地址不打开开关，推送不会发出来）。',
       webhookNeedPeer: '只有 Gopeed 那边也添加了同一个 URL，推送才会真的到达插件。',
       webhookOffWarning: '未启用：下载完成后收不到推送，只能主动查询（gopeed_list）。',
-      webhookAutoNote: '插件会自动写入，无需手动填地址。',
-      webhookRestartWarning: 'auto 写入后需要重启 Gopeed 才会生效（GUI 里可能仍显示旧配置）。重启会中断正在进行的下载。',
+      webhookAutoNote: 'auto 需要 agent 调用 gopeed_events action=apply 才会保存进 Gopeed；本页保存不影响 Gopeed。',
+      webhookRestartWarning: '保存后需要重启 Gopeed 才会生效（GUI 里可能仍显示旧配置）。重启会中断正在进行的下载。',
       restart: '重启 Gopeed',
       restartHint: '会中断正在进行的下载',
       restartConfirm: '重启 Gopeed 会中断正在进行的下载，确定继续吗？',
@@ -131,20 +132,22 @@ window.__ModuleLoader__.load({
       summary: 'Gopeed downloader: add / list / status / pause / resume / remove, with editable host and token.',
       title: 'Connection',
       downloadTarget: 'Save to',
-      downloadTargetHint: 'Workspace = this session folder; Gopeed default = whatever Gopeed is set to; Custom = your own path.',
+      downloadTargetHint: 'Default: Workspace (= this session folder). Gopeed default = whatever Gopeed is set to; Custom = your own path, and leaving it empty falls back to the Gopeed default directory.',
       downloadTargetWorkspace: 'Workspace',
       downloadTargetGopeed: 'Gopeed default',
       downloadTargetCustom: 'Custom',
       customDownloadPath: 'Custom path',
-      customDownloadPathPlaceholder: 'e.g. D:\\Downloads',
+      customDownloadPathPlaceholder: 'Empty = Gopeed default directory',
+      customDownloadPathHint:
+        'Default: empty; empty = use the Gopeed default download directory (whatever Gopeed itself is set to), a custom path applies only when you type one.',
       host: 'Gopeed listen address',
-      hostHint: 'IP or hostname only, e.g. 127.0.0.1 - no http:// and no port (the port goes in the field below). Find it in Gopeed under Settings -> Advanced -> Protocol (TCP).',
+      hostHint: 'Default: 127.0.0.1. Required: an empty value is rejected on save. IP or hostname only, e.g. 127.0.0.1 - no http:// and no port (the port goes in the field below). Find it in Gopeed under Settings -> Advanced -> Protocol (TCP).',
       port: 'Port',
-      portHint: 'Defaults to 0: the plugin auto-detects the port the running Gopeed holds. Enter the same fixed number you pinned in Gopeed (for example 9999) only if you pinned one.',
+      portHint: 'Default: 0 = the plugin auto-detects the port the running Gopeed holds. Empty is rejected on save (type 0 for auto-detect); enter the same fixed number you pinned in Gopeed (for example 9999) only if you pinned one.',
       token: 'Token',
-      tokenHint: 'Gopeed -> Settings -> Advanced -> Token, sent as a request header.',
+      tokenHint: 'Default: empty. With no saved token, empty = no token is sent (Gopeed ships with auth disabled); with one saved, empty = keep it unchanged (this form cannot clear it). Gopeed -> Settings -> Advanced -> Token, sent as a request header.',
       exe: 'Executable (optional)',
-      exeHint: 'Leave blank: the plugin tries the default Gopeed install path first, then the running process, the registry, Start Menu/Desktop shortcuts, and common paths. Fill it only for portable or unusual installs.',
+      exeHint: 'Default: empty = auto-detect. The plugin tries the default Gopeed install path first, then the running process, the registry, Start Menu/Desktop shortcuts, and common paths. Fill it only for portable or unusual installs.',
       exePlaceholder: 'Blank = auto-detect (recommended)',
       tokenSet: 'Already set (leave blank to keep it)',
       tokenUnset: 'Not set',
@@ -153,14 +156,13 @@ window.__ModuleLoader__.load({
       saving: 'Saving...',
       saved: 'Saved. Volatile fields apply immediately, no restart needed.',
       noChanges: 'No changes.',
-      rejected: 'The host rejected this write; refresh the page and try again.',
+      rejected: 'DSH rejected this save; refresh the page and try again.',
       failed: 'Save failed',
       hostRequired: 'Host must not be empty.',
       portInvalid: 'Port must be an integer between 0 and 65535 (0 = auto-detect).',
       loading: 'Reading configuration...',
       unavailable: 'The configuration form is unavailable: the host exposes no settings for this plugin.',
       verify: 'After saving, ask the agent to call gopeed_process to verify connectivity.',
-      webhook: 'Webhook push (download finished notifications)',
       webhookHint: 'Gopeed pushes status to the plugin when a download finishes; the plugin only listens on a local port and never starts a network request.',
       webhookPushOptional: 'Webhook push (optional)',
       webhookDrawerExpand: 'Expand',
@@ -169,18 +171,18 @@ window.__ModuleLoader__.load({
       webhookDutyWake: 'Automatic agent wake-up on download complete does NOT depend on the webhook: it is handled by a DSH background task, so wake-up works with the webhook off.',
       webhookDutyPush: 'The webhook is an optional enhancement only: wake-up and gopeed_list queries work without it; only push-based extras need it - the bottom-right toast notices, the gopeed_events event cache, and the Agent.inject fallback for a download no job is tracking.',
       webhookDutySlower: 'It never makes wake-up faster: wake-up is handled by a background task, unrelated to the webhook.',
-      webhookDutyRestart: 'Once configured, Gopeed must be fully quit and restarted for it to take effect (closing the window to the tray does not count).',
+      webhookDutyRestart: 'Once saved, Gopeed must be fully quit and restarted for it to take effect (closing the window to the tray does not count).',
       webhookModeOff: 'off - disabled (default)',
       webhookModeOffHint: 'Listen on no port; after a download finishes you have to ask gopeed_list yourself.',
       webhookModeManual: 'manual - configure by hand',
       webhookModeManualHint: 'The plugin listens on a local port; add the full address shown in the status block below in Gopeed -> Settings -> Developer -> Webhook push, and confirm the "Enable webhook" switch on that page is ON.',
-      webhookModeAuto: 'auto - configure automatically',
-      webhookModeAutoHint: 'The plugin writes the listen address into the Gopeed configuration automatically; Gopeed must be restarted before it takes effect.',
+      webhookModeAuto: 'auto - saved by the agent',
+      webhookModeAutoHint: 'auto never applies itself: the address reaches the Gopeed configuration only when the agent is asked to call gopeed_events (action=apply). Saving this page changes the plugin settings only, and Gopeed must be restarted afterwards.',
       webhookPort: 'Webhook listen port',
-      webhookPortHint: 'An integer from 0 to 65535: 0 lets the system pick a free port (it may differ each time), any number is pinned as-is.',
+      webhookPortHint: 'Default: 0 = the system picks a free port (it may differ each time). An integer from 0 to 65535; empty is rejected on save; any number is pinned as-is.',
       webhookPortRandom: 'Random port',
       webhookToast: 'Corner toast',
-      webhookToastHint: 'Gopeed already posts its own notification through the Windows notification center. Enabling this makes the plugin show its own toast with more detail (name / size / path), which duplicates the Gopeed one: turn it on for the detail, leave it off to stay quiet. This switch only affects user-facing toasts; it does not affect job wake-up (background task), the Agent.inject fallback, or the gopeed_events event cache.',
+      webhookToastHint: 'Default: off. Gopeed already posts its own notification through the Windows notification center. Enabling this makes the plugin show its own toast with more detail (name / size / path), which duplicates the Gopeed one: turn it on for the detail, leave it off to stay quiet. This switch only affects user-facing toasts; it does not affect job wake-up (background task), the Agent.inject fallback, or the gopeed_events event cache.',
       webhookPortInvalid: 'Webhook port must be an integer between 0 and 65535 (0 = auto-assign).',
       webhookStatus: 'Webhook status',
       webhookStatusMode: 'Current mode',
@@ -191,8 +193,8 @@ window.__ModuleLoader__.load({
       webhookManualStep: 'Add the address above in Gopeed -> Settings -> Developer -> Webhook push, then confirm the "Enable webhook" switch on that page is ON (an address alone sends nothing).',
       webhookNeedPeer: 'Pushes only arrive when the same URL is also added on the Gopeed side.',
       webhookOffWarning: 'Not enabled: the plugin receives no push after a download finishes, so you can only poll it yourself (gopeed_list).',
-      webhookAutoNote: 'The plugin writes the address automatically; no manual entry needed.',
-      webhookRestartWarning: 'The auto write takes effect only after restarting Gopeed (the GUI may still show the old configuration). Restarting interrupts downloads in progress.',
+      webhookAutoNote: 'auto needs the agent to call gopeed_events action=apply before Gopeed sees it; saving this page does not touch Gopeed.',
+      webhookRestartWarning: 'It takes effect only after restarting Gopeed (the GUI may still show the old configuration). Restarting interrupts downloads in progress.',
       restart: 'Restart Gopeed',
       restartHint: 'Interrupts downloads in progress',
       restartConfirm: 'Restarting Gopeed interrupts downloads in progress. Continue?',
@@ -661,19 +663,22 @@ window.__ModuleLoader__.load({
           setError(t('portInvalid'))
           return
         }
+        const nextWebhookMode =
+          webhookMode === 'manual' || webhookMode === 'auto' ? webhookMode : 'off'
+        // Only manual mode renders the port field, so only manual mode may reject its value:
+        // validating it in off/auto reports an error against a control the user cannot see.
         const webhookPortText = webhookPort.trim()
         const webhookPortValue = Number(webhookPortText)
         if (
-          webhookPortText === '' ||
-          !Number.isInteger(webhookPortValue) ||
-          webhookPortValue < 0 ||
-          webhookPortValue > 65535
+          nextWebhookMode === 'manual' &&
+          (webhookPortText === '' ||
+            !Number.isInteger(webhookPortValue) ||
+            webhookPortValue < 0 ||
+            webhookPortValue > 65535)
         ) {
           setError(t('webhookPortInvalid'))
           return
         }
-        const nextWebhookMode =
-          webhookMode === 'manual' || webhookMode === 'auto' ? webhookMode : 'off'
         const ops = []
         if (nextHost !== String(value.host ?? '')) ops.push({ op: 'set', path: ['host'], value: nextHost })
         if (portNumber !== Number(value.port ?? 0)) ops.push({ op: 'set', path: ['port'], value: portNumber })
@@ -786,6 +791,7 @@ window.__ModuleLoader__.load({
                 disabled: busy || state.writable === false,
                 onChange: (event) => setCustomDownloadPath(event.target.value),
               }),
+              note(styles.hint, t('customDownloadPathHint')),
             )
           : null,
         h(
@@ -1001,7 +1007,7 @@ window.__ModuleLoader__.load({
                     note(styles.note, `${t('webhookStatusMode')}: ${t(WEBHOOK_MODE_LABEL[webhookMode])}`),
                     // Each mode says only what applies to it: off is a warning, manual
                     // shows the concrete URL (or why there is none yet), auto explains
-                    // that the plugin writes it and that Gopeed must restart.
+                    // that the plugin saves it and that Gopeed must restart.
                     webhookMode === 'off' ? note(styles.errNote, t('webhookOffWarning')) : null,
                     webhookMode === 'manual' && webhookPortFixed
                       ? h(

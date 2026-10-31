@@ -5,9 +5,44 @@ All notable changes to `dsh-gopeed` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries are English because
 this file is part of the repository that both people and agents read; the Chinese edition of the
-project README lives in [docs/README.zh.md](docs/README.zh.md).
+project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gopeed/blob/main/docs/README.zh.md).
 
 ## [Unreleased]
+
+### Changed
+
+- **The documentation is split in two, and the README is a landing page again.** `README.md` keeps the
+  first screen -- what the plugin is, what it cannot do, installation, the settings defaults and the numbered
+  known limitations -- and folds the design argument, the prompt-footprint measurement, the implementation
+  notes and the development instructions into `<details>` blocks, so the repository page can be skimmed at a
+  glance instead of at 500 lines. The agent-facing material moved to a new **`docs/AGENTS.md`**: the tool table with
+  the result fields DSH validates, the do-not-poll rule, the save-location order, an error playbook and an
+  explicit do-not list. `README.md` points at it in a notice at the top rather than repeating it, and
+  It deliberately stays in `docs/` and out of the published `files`, because it is written for a model reading the repository, not for the installed plugin; `README.md` links to it on GitHub. No behaviour, no tool definition and no prompt character
+  changed.
+- **The settings form now states every default and what an empty field means.** Each hint leads with the real
+  default from the `Config` schema: save location `Workspace`, host `127.0.0.1` (and required), port `0` =
+  auto-detect, token empty = nothing sent, executable path empty = auto-detect, webhook port `0` = system-assigned.
+  The custom path field gained a permanent hint plus an `Empty = Gopeed default directory` placeholder, because
+  emptying it used to save fine and then quietly download into Gopeed's own directory. The port fields also say
+  that an empty box is rejected on save, so auto-detect means typing `0`, not clearing the field; the token hint
+  says empty keeps the stored token unchanged. Both dictionaries changed together.
+- **The webhook auto mode says "save", not "write".** "Write" was not understood as an action a user takes, so
+  every user-facing string about the automatic webhook configuration now says "save" (the Chinese strings use
+  the equivalent verb): the mode hint, the
+  drawer note, the restart warning, the runtime messages (`nothing was saved`, `Saving Gopeed config failed`) and
+  the same wording in both READMEs. Nothing about the mechanism changed -- the plugin still PUTs the address into
+  Gopeed's configuration and Gopeed still applies it only on a full restart.
+- **`gopeed_events` reads better.** `Events; apply saves webhook config.` became
+  `Events; action=apply saves the webhook config.` (+10 characters), naming the parameter value so the sentence
+  parses.
+- **`gopeed_add` says the job runs in the background.** Its description is now
+  `Download a URL through Gopeed. Returns a background job that notifies when it ends.` (+29 characters), and the
+  output note says the job *runs in the background*, to *not poll and not wait*, and to read the result *after
+  the notice* -- the previous "Read it with job_output" read like an instruction to block on it.
+- **Prompt footprint re-measured: 1339 to 1378 characters** (+39, the two descriptions above). The 0.3.0 figure
+  previously recorded as 1343 was 4 characters high because `gopeed_process` measured 114 instead
+  of its real 110; every baseline is now taken from a fresh measurement of the loaded tools.
 
 ## [0.3.0] - 2026-10-31
 
@@ -55,8 +90,8 @@ project README lives in [docs/README.zh.md](docs/README.zh.md).
   the inject fallback and the toast, while `webhookToast` gates the toast alone.
 - **Tool descriptions state capability instead of terse fragments.** `gopeed_add`, `gopeed_list`,
   `gopeed_status`, `gopeed_process` and `gopeed_launch` were rewritten (for example `Create task.` became
-  `Download a URL through Gopeed. Returns a tracking job.`), taking the seven tool definitions from
-  **1217 to 1343 characters** (+126). The job fields from 0.3.0 add nothing because they only live in
+  a one-line capability statement), taking the seven tool definitions from
+  **1217 to 1339 characters** (+122). The job fields from 0.3.0 add nothing because they only live in
   `output.schema`. The README and `package.json` openers were also changed to describe capabilities and
   boundaries rather than "open the config page and enter the address and port".
 - **The settings page no longer exposes API vocabulary.** The visible labels are now **Gopeed listen address /
@@ -159,9 +194,9 @@ project README lives in [docs/README.zh.md](docs/README.zh.md).
   URL; the plugin now runs a loopback listener for it. `webhookMode` selects the behaviour:
   - `off` (default) - no listener, nothing is opened on the machine
   - `manual` - the plugin listens and shows the exact URL to add in Gopeed
-    (Settings -> Developer -> Webhook push). The plugin never writes Gopeed's settings; note that
+    (Settings -> Developer -> Webhook push). The plugin never saves Gopeed's settings; note that
     Gopeed also has an **"Enable webhook" switch** there, and an address alone sends nothing.
-  - `auto` - same listener, plus `gopeed_events action=apply`, which writes the URL into Gopeed's
+  - `auto` - same listener, plus `gopeed_events action=apply`, which saves the URL into Gopeed's
     config after reading it, preserving any URLs you already had and verifying the result by reading
     the config back.
 - **Two notification channels, neither of which writes a chat message.** A finished download produces
@@ -173,7 +208,7 @@ project README lives in [docs/README.zh.md](docs/README.zh.md).
   for people who want a reproducible number. A fixed port is what makes the URL stable across DSH
   restarts, which matters in `manual` mode where you paste it into Gopeed once.
 - **`gopeed_events` tool** - reads the events the listener collected (`since`, `unreadOnly`), and in
-  `auto` mode `action=apply` writes the webhook config. Events are kept in a 50-entry ring buffer in
+  `auto` mode `action=apply` saves the webhook config. Events are kept in a 50-entry ring buffer in
   memory and marked read once returned.
 - **Sandbox strategy: act confined, look unconfined, and say which.** Starting or stopping Gopeed
   (`gopeed_launch`, the Restart button) now runs through `ctx.sandbox.confine` under the session's
@@ -182,7 +217,7 @@ project README lives in [docs/README.zh.md](docs/README.zh.md).
   `launchSandboxed` / `sandboxMode` / `sandboxDetail` on launch and restart, and
   `diagnosticsSandboxed` / `diagnosticsSandboxNote` on `gopeed_process`. A policy refusal
   (`SANDBOX_UNAVAILABLE`) stops the action and says so; the plugin never silently runs unconfined.
-- **"Restart Gopeed" button on the settings page** - the only restart path. It writes the webhook
+- **"Restart Gopeed" button on the settings page** - the only restart path. It saves the webhook
   config first, then **force-kills** the process, waits for it to actually exit, relaunches it, and
   waits for the API to answer. It is destructive (interrupts running downloads) so it sits behind
   `window.confirm`.
