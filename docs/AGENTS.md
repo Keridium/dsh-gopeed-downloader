@@ -1,4 +1,4 @@
-# AGENTS.md
+# dsh-gopeed: the agent contract
 
 Agent-facing contract for **`dsh-gopeed`**, a DSH bundle that drives a local
 [Gopeed](https://gopeed.com/) download manager. This file is for the model that calls the tools. Human

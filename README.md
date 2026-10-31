@@ -12,8 +12,14 @@
   <b>7 tools</b> &nbsp;|&nbsp; downloads anywhere, process control <b>Windows-only</b> &nbsp;|&nbsp; needs <b>Gopeed 1.9.3+</b>
 </p>
 
-> **If you are an AI agent, read [AGENTS.md](https://github.com/Keridium/dsh-gopeed/blob/main/docs/AGENTS.md) first.** It holds the tool contract, the
-> do-not-poll rule, the save-location precedence and the error playbook. This file is written for humans.
+> [!IMPORTANT]
+> **Reading this as an agent? Stop and open [docs/AGENTS.md](https://github.com/Keridium/dsh-gopeed/blob/main/docs/AGENTS.md) instead.**
+>
+> That file is the contract: the seven tools with the result fields DSH validates, the **do-not-poll** rule
+> for `gopeed_add`, the save-location order, an error playbook keyed on `verdict`, and an explicit do-not
+> list. This README is the human landing page and deliberately does not repeat it.
+>
+> **If you maintain an agent that uses this plugin, point it at that URL -- not at this file.**
 
 Turn a local **[Gopeed](https://gopeed.com/)** download manager into agent tools inside **DeepSeek Harness
 (DSH)**: start downloads, follow them, steer them, diagnose or launch the Gopeed process, and receive
@@ -431,8 +437,9 @@ or on GitHub -> follow that split.
 
 ## Documentation
 
-- **[AGENTS.md](https://github.com/Keridium/dsh-gopeed/blob/main/docs/AGENTS.md)** -- the agent-facing contract: tool table, save-location order, error playbook, what
-  not to do. Link an agent here instead of this README.
+- **[docs/AGENTS.md](https://github.com/Keridium/dsh-gopeed/blob/main/docs/AGENTS.md)** -- **the agent contract; send an agent here, not to this README.** Tool
+  table with the result fields DSH validates, the do-not-poll rule, the save-location order, an error playbook
+  keyed on `verdict`, and an explicit do-not list.
 - [docs/README.zh.md](https://github.com/Keridium/dsh-gopeed/blob/main/docs/README.zh.md) -- the full Chinese
   edition of this document.
 - [docs/GETTING-STARTED.md](https://github.com/Keridium/dsh-gopeed/blob/main/docs/GETTING-STARTED.md) -- a
