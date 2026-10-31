@@ -1,0 +1,67 @@
+# ── 依赖 ─────────────────────────────────────────────────────────────
+# 最重要的规则：node_modules/ 绝对不能进仓库。
+# 本目录下的 @deepseek-ai/schemastery 与 @deepseek-ai/cosmokit 只是
+# 为「link: 安装」准备的第三方副本（版权归 DSH / 原作者），
+# 公开仓库里由 profile 自己的依赖提供，克隆者按 README 的说明处理。
+node_modules/
+
+# 打包产物（npm pack / 手工压的发行包）
+*.tgz
+*.tar.gz
+
+# ── 运行与调试 ───────────────────────────────────────────────────────
+# 插件运行日志、DSH 插件管理器写的诊断日志
+*.log
+logs/
+.plugin-manager/
+
+# 临时文件
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# ── 操作系统 ─────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ── 编辑器 ───────────────────────────────────────────────────────────
+# 说明：.vscode/ 这里选择「忽略整个目录」。
+# 理由：编辑器配置因人而异，且很容易把本机绝对路径、调试启动项写进去；
+# 如果确实有值得共享的配置（例如推荐扩展清单），
+# 建议改用 `.vscode/extensions.json` 白名单方式取消忽略下面一行再加：
+#   !.vscode/extensions.json
+.vscode/
+.idea/
+*.code-workspace
+
+# ── 锁文件 ───────────────────────────────────────────────────────────
+# 取舍说明：本包是 lib 型插件（没有构建步骤、没有 devDependencies、
+# 运行时不装任何依赖），锁文件对本包自身的可复现性没有帮助，
+# 反而会把维护者本机的解析结果（含 registry / integrity 信息）带进仓库。
+# 因此默认忽略。
+#
+# 如果你更希望「克隆后 pnpm install 得到完全一致的依赖树」，
+# 可以删掉下面三行并提交其中一种锁文件 —— 但请只提交一种，
+# 且不要提交由 link: 安装产生的 lock 内容。
+#   package-lock.json   # npm
+#   pnpm-lock.yaml      # pnpm（DSH 自带的管理器用它）
+#   yarn.lock           # yarn
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# ── 其它 ─────────────────────────────────────────────────────────────
+# 本地开发时用来放草稿/截图的目录
+scratch/
+*.local
+.env
+.env.*
