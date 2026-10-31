@@ -1692,8 +1692,8 @@ export function apply(ctx, config) {
    * behaviour this plugin must not have. It is delivered at most once.
    */
   const SETUP_NOTICE = [
-    '[!] Gopeed is not ready yet, so this downloader plugin cannot be used. Three steps fix it - no command line needed:',
-    '1) Install Gopeed: open https://gopeed.com, download the Windows build, double-click the installer, then open Gopeed.',
+    '[!] Gopeed is not reachable, so this downloader plugin cannot work yet. Three checks fix it - no command line needed:',
+    '1) Gopeed must be running. If it is installed but not running (it may have crashed or been closed), start it by double-clicking its icon. Only if it is not installed at all, download the Windows build from https://gopeed.com and install it.',
     '2) Pin the API port: in Gopeed open Settings -> Advanced -> Protocol, keep TCP and set the address to a fixed port, for example 127.0.0.1:9999. Gopeed defaults to port 0, a random port on every launch; the plugin can usually detect it, but pinning removes the guesswork.',
     '3) Token (optional): if you set a token on that same page, enter the same value in DSH -> Plugins -> Installed -> Gopeed downloader -> row gopeed -> Config, with address 127.0.0.1 and the same port, then save.',
     'Tell me when that is done and I will check again.',
@@ -1910,7 +1910,8 @@ export function apply(ctx, config) {
    * definitions - those live in the system prompt on every turn.
    */
   const SETUP_GUIDE =
-    'Steps: 1) If it is not installed, download and open Gopeed from https://gopeed.com. ' +
+    'Steps: 1) Make sure Gopeed is running: start it if it is installed, or download and install it from ' +
+    'https://gopeed.com if it is not. ' +
     '2) In Gopeed open Settings -> Advanced -> Protocol, keep TCP and pin the address to a fixed port such as ' +
     '127.0.0.1:9999 (Gopeed defaults to port 0, a random port per launch; the plugin can usually detect it, but ' +
     'pinning removes the guesswork). ' +
@@ -2426,7 +2427,31 @@ export function apply(ctx, config) {
         }
       }
 
-      const after = await waitForApi({ ...base, waitMs: 10000 })
+      // A freshly started Gopeed comes up on a NEW random port (the config default is 0), and that
+      // port only appears once the process starts listening. Probing one fixed port for the whole
+      // budget therefore reports a false failure -- the same trap the restart path already fixes.
+      // Detect and probe in a loop instead.
+      autoPort = 0
+      autoPortAt = 0
+      const deadline = Date.now() + 15000
+      let port = Number(config.port.get()) || 0
+      let after = { state: 'unknown', detail: 'not probed yet' }
+      for (;;) {
+        const detected = await ensureApiPort(true)
+        if (detected > 0) port = detected
+        if (port > 0) {
+          after = await waitForApi({
+            host: config.host.get(),
+            port,
+            token: config.token.get(),
+            timeoutMs: 2000,
+            waitMs: 1800,
+          })
+          if (after.state === 'ok') break
+        }
+        if (Date.now() >= deadline) break
+        await new Promise((resolve) => setTimeout(resolve, 700))
+      }
       const ok = after.state === 'ok'
       const pidNote = launch.sandbox?.sandboxed
         ? ' (pid is the sandbox runner; the confined Gopeed pid is detected separately)'

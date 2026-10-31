@@ -452,7 +452,7 @@ DSH 每轮都会把每个工具的 `{name, description, parameters}` 投影进 s
 3. **事件只在内存里**：环形缓冲 50 条，插件重载或 DSH 重启即清空，不落盘。
 4. **配置页的视觉排版没截图确认**：数据链路（slot key、`form.state/mutate`、字段投影、token 脱敏）都验过，
    但样式只是内联 CSS，没在浏览器里看过实际效果。
-5. **BT / 磁力任务没实测**：代码按 `protocol` 透传，`meta.res` 缺失时降级为 `sizeKnown=false`。
+5. **BT / 磁力任务只做了浅测**：用一个 Debian 13.7 netinst ISO 的官方磁力链接端到端验证过——metadata 解析出 756 MB、开始下载约 4 MB/s、跟踪 job 正常。更少见的场景（没有 peers、只靠 DHT、私有 tracker、重启后继续磁力任务）仍未验证。`meta.res` 缺失时会降级为 `sizeKnown=false`，而不是编一个百分比。
 6. **`gopeed_control` 的 `remove` 是幂等的**：Gopeed 1.9.3 对不存在的 id 执行 `DELETE` 也回成功，所以重复删除显示「已删除」。
 7. **重启后「已就绪」是轮询 API 判断的**，如果 Gopeed 在加载界面时 API 已通，会提前报就绪（不影响使用）。
 8. **Webhook 监听只绑回环**：Gopeed 跑在 Docker 里或另一台机器上时，不额外做网络映射就推不过来。

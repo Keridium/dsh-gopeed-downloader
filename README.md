@@ -428,7 +428,7 @@ the total is still **1217**.
 2. **Webhook delivery depends on Gopeed applying its config after a full restart.** Until then the GUI may show stale values, and no event will arrive. The plugin cannot tell "not enabled in Gopeed" apart from "enabled but not restarted"; both look like zero events received.
 3. **Events are in-memory.** The ring buffer holds 50 entries and is emptied by a plugin reload or a DSH restart. Nothing is written to disk.
 4. **The settings form's visual layout is unverified.** The data path (slot key, `form.state` / `mutate`, field projection, token redaction) is tested; the styling is inline CSS nobody has looked at in a browser.
-5. **BT / magnet tasks are untested.** The protocol is passed through, and a missing `meta.res` degrades to `sizeKnown: false` rather than an invented percentage.
+5. **BT / magnet tasks are tested lightly.** A Debian 13.7 netinst ISO magnet was verified end to end: the metadata resolved to 756 MB, the transfer started at about 4 MB/s, and the tracking job followed it. Harder cases -- a magnet with no peers, DHT-only discovery, a private tracker, or resuming a magnet after a restart -- are still unverified. A missing `meta.res` degrades to `sizeKnown: false` rather than an invented percentage.
 6. **`remove` is idempotent.** Gopeed 1.9.3 answers a `DELETE` for an unknown id with success, so deleting twice still reports "removed".
 7. **Readiness after a restart is inferred by polling the API,** so a Gopeed that already serves requests while still showing a loading screen is reported ready early. Harmless.
 8. **The webhook listener binds loopback only.** A Gopeed running in Docker, or on another machine, cannot push to it without extra networking.
