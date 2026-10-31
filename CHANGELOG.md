@@ -60,6 +60,18 @@ project README lives in [docs/README.zh.md](docs/README.zh.md).
 - **The terminal detail repeated its own reason.** A `kill()` forwards the reason to the producer, and the
   registry appends it again, so the detail read "removed by gopeed_control; removed by gopeed_control". The
   producer now contributes a generic detail on that path and the reason appears once.
+- **A pasted `host:port` or URL failed with a misleading error.** The `host` field had no format check, so
+  the two shapes people actually paste -- `127.0.0.1:9999` and `http://127.0.0.1` -- became
+  `http://127.0.0.1:9999:9999` (ERR_INVALID_URL) or `http://http://127.0.0.1:9999` (a DNS lookup of the name
+  "http"), and the failure surfaced as "cannot reach Gopeed; check host/port". Both are now rejected up front
+  with a message saying to put the address in `host` and the number in `port`; a bare IPv6 literal is told to
+  use brackets.
+- **`exePath` accepted a directory or any file.** A plain `existsSync` treated `C:\Windows` or a `.ini` as a
+  valid executable, which skipped the auto-discovery that would have found the real Gopeed and then failed
+  with a raw `spawn ENOENT`/`EFTYPE`. Only a real `.exe` file now counts as configured, so a wrong path falls
+  back to discovery.
+- **`Launch failed: launch failed: ...`** -- the producer's message carried its own prefix on top of the
+  caller's. The prefix now lives in one place.
 
 ### Documentation
 
