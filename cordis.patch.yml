@@ -6,12 +6,19 @@
 # A second override with the same id replaces the whole `config` block
 # instead of merging into it, so keep this block complete.
 #
-# `token` is intentionally absent: the Config schema defaults it to `deepseek`,
-# and once a user saves the settings form the settings service writes it back
-# into this row.
+# `token` is intentionally absent: the Config schema defaults it to an empty
+# string, and Gopeed ships with an empty token (which disables auth), so the two
+# match out of the box. Once a user saves the settings form, the settings
+# service writes the saved value back into this row.
+#
+# `port: 0` is the auto-detect default, not a Gopeed port: the desktop build
+# listens on 127.0.0.1:0, a random port per launch, so the plugin asks Windows
+# which port the running process actually holds. Put a fixed number here (and in
+# Gopeed) only to pin one; `9999` is this plugin's convention, never a Gopeed
+# default.
 - insert:
     - id: gopeed
       name: dsh-gopeed
       config:
         host: 127.0.0.1
-        port: 9999
+        port: 0
