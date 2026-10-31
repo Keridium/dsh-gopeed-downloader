@@ -1,6 +1,12 @@
-# dsh-gopeed
+<p align="center">
+  <img src="../icon.svg" width="88" height="88" alt="dsh-gopeed">
+</p>
 
-[English](../README.md) | 中文
+<h1 align="center">dsh-gopeed</h1>
+
+<p align="center">
+  <a href="../README.md">English</a> | 中文
+</p>
 
 > 本文档面向中文用户；agent 请阅读英文版 [README.md](../README.md)。
 
@@ -14,8 +20,12 @@
   工具返回的正文同样是英文（工具输出也属于 agent 可见内容）。合并与精简过程见「七、实测记录」
 - **下载完成推送（Webhook）三模式**：`off`（默认，不监听）/ `manual`（插件监听，地址由你手动填进 Gopeed）/
   `auto`（插件监听，且允许 `gopeed_events action=apply` 把地址写进 Gopeed 配置）。详见「五」
-- **通知不进对话**：右下角 toast（6 秒自动消失）+ `Agent.inject`（只进下一轮模型上下文，**不唤醒 agent**）。
-  插件**不会**再往对话里发消息：旧的 `followup` / `deferContext` 已移除，那种做法会冒充用户发言
+- **下载完成自动唤醒（0.3.0）**：`gopeed_add` 会把这次下载注册成 **DSH 后台任务**（`kind: "gopeed"`），
+  下载结束时任务 settle，由 DSH 官方 `dsh-tool-jobs` 发出**它自己的**完成通知：agent 忙就下一轮读到，
+  agent 空闲就**开新一轮把它唤醒**。通知文字属于 harness，插件不写任何用户身份的消息
+- **通知不进对话**：右下角 toast（6 秒自动消失）+ `Agent.inject`（只进下一轮模型上下文，**不唤醒 agent**，
+  现在只作为「没有后台任务覆盖」时的降级通道）。插件**不会**再往对话里发消息：
+  旧的 `followup` / `deferContext` 已移除，那种做法会冒充用户发言
 - **工具自己会找人**：检测到 Gopeed 没装/没配好时，会直接把英文分步说明写进**本次工具输出**（错误信息或
   `gopeed_process.advice`），不依赖用户去翻文档，也只发一次；它不是聊天消息
 - 只走回环（端口**默认自动检测**：向 Windows 询问正在运行的 Gopeed 实际占用的端口；Gopeed 桌面版出厂是
@@ -119,7 +129,7 @@ Token 框留空就不会写回，旧 Token 保持有效。上方有实时的 `�
 
 | 工具 | 参数 | 返回 | 说明 |
 |---|---|---|---|
-| `gopeed_add` | `url` 必填，`path` 可选，`name` 可选 | `taskId`、`url`、`name`、`path`、`baseUrl` | 新建下载任务。`path` 是保存目录；`name` 是可选的显示名（不填则由 Gopeed 从链接推导） |
+| `gopeed_add` | `url` 必填，`path` 可选，`name` 可选 | `taskId`、`url`、`name`、`path`、`baseUrl`、`jobId`、`jobNote` | 新建下载任务。`path` 是保存目录；`name` 是可选的显示名（不填则由 Gopeed 从链接推导）。`jobId` 是跟踪这次下载的后台任务（宿主不支持时为空），`jobNote` 说明为什么没有 |
 | `gopeed_list` | `status` 可选（`ready`/`running`/`pause`/`wait`/`error`/`done`） | `count` + 任务数组 | 列出所有任务 |
 | `gopeed_status` | `id` | 单个任务 | 查进度 |
 | `gopeed_control` | `id` + `action`（`pause`/`resume`/`remove`），`remove` 可带 `force` | `{ok,id,action,status,message}` | 暂停 / 继续 / 删除 |
@@ -213,18 +223,62 @@ GUI 里也可能一直显示旧值，所以「设置页看起来没变」并不�
 **返回即标记已读**，所以连着调两次 `unreadOnly:true`，第二次通常为空。`gopeed_process` 也会报告 Webhook 状态，
 不读缓冲也能判断链路通没通。
 
-### 两个通知通道，都不进对话
+### 三个通知通道，都不进对话
 
-`webhookNotify` 默认开着时，一条被接收的事件会走两条路：
+一次下载完成最多走三条路，**都不会**往对话里写消息：
 
-- **右下角 toast**：由插件自己的前端渲染，6 秒自动消失。页面通过需要鉴权的
-  `GET /api/dsh-gopeed/notifications` 轮询；这个通道**不会**把事件标记为已读，所以之后 `gopeed_events`
-  看到的 unread 数仍然是对的。
-- **`Agent.inject`**：同一份摘要作为模型可见上下文排进 agent 的**下一轮**。它**不唤醒 agent**，也不会渲染成聊天消息。
+1. **后台任务（主通道，也是唯一能唤醒 agent 的通道）**：`gopeed_add` 会把它刚创建的任务注册成 DSH 后台任务，
+   任务结束时由 DSH 自己的 `dsh-tool-jobs` 发出会话内完成通知——agent 忙就在下一步读到，空闲就被开新轮唤醒。
+   通知文字属于 harness，插件不冒充用户。详见下面「下载完成自动唤醒」。
+2. **右下角 toast（始终有，给人看）**：由插件自己的前端渲染，6 秒自动消失。页面通过需要鉴权的
+   `GET /api/dsh-gopeed/notifications` 轮询；这个通道**不会**把事件标记为已读，所以之后 `gopeed_events`
+   看到的 unread 数仍然是对的。
+3. **`Agent.inject`（降级通道）**：只用于**没有后台任务覆盖**的完成——你在 Gopeed 界面里自己加的下载、
+   别的客户端加的下载，或宿主根本没装 `ctx.jobs`。同一份摘要作为模型可见上下文排进 agent 的**下一轮**，
+   它**不唤醒 agent**，也不会渲染成聊天消息。**后台任务已经覆盖的任务不会再 inject**：两条通道说的是同一件事，
+   实测中发现模型会因此读到两遍。
+
+`webhookNotify`（默认开）只管第 2、3 条；第 1 条由 `gopeed_add` 触发，不依赖 Webhook，所以
+`webhookMode: off` 时 agent 自己发起的下载照样有完成通知。
 
 **插件不再往对话里发消息。** 旧的 `Agent.followup` 和 `ToolRunContext.deferContext` 都已移除：两者都会以
 `role: 'user'` 的身份把插件文字送进会话，看起来就像用户自己说的。现在引导文字只出现在**工具自己的输出**里，
-下载通知只走 toast 与 `inject`。把 `webhookNotify` 设为 `false`，事件就只进缓存。
+下载通知只走上面三条通道，而「唤醒」这一条是 DSH 官方的，不是插件伪造的。把 `webhookNotify` 设为 `false`，
+Webhook 事件就只进缓存（第 1 条不受影响）。
+
+### 下载完成自动唤醒（DSH 后台任务）
+
+拿 `gopeed_status` 一轮一轮查进度是错的做法：每查一次烧一步，文件真下完时 agent 也没有可回应的东西。
+所以 `gopeed_add` 同时把这次下载注册成 **DSH 后台任务**（`kind: "gopeed"`，id 形如 `gopeed-<16 位十六进制>`），
+下载结束时由 DSH 通知 agent。
+
+实际行为：
+
+- `gopeed_add` 返回 `jobId`，它自己的输出里也会写明 `Tracking job: gopeed-…` 和对应的 `job_output` 调用；
+- 任务每 **3 秒**查一次 Gopeed；任务处于 `pause` / `wait` 时放慢到 **30 秒**一次——暂停的下载不是进展，
+  全速轮询毫无收益；
+- 下载完成 → settle 为 `completed`，detail 带文件大小；Gopeed 报 `error` → `failed`；
+  任务从 Gopeed 里消失 → `killed`；
+- 随后 `dsh-tool-jobs` 发出**它自己的**完成通知 `background job gopeed-… (gopeed: download x.iso) finished
+  [status: completed, …]`：agent 忙就在下一步读到，空闲就被**开新一轮唤醒**。这是 DSH 官方机制
+  （`ctx.jobs` + `dsh-tool-jobs` 的 completion notice），**不是**插件伪造的用户消息，插件也不会往对话里加东西；
+- `gopeed_control action:"remove"` 会取消对应的跟踪任务，删掉的下载不会留下野轮询；
+- `job_output <jobId>`（可加 `wait: true`）读取任务，最多阻塞到配置的超时。最终回答前用它收任务，别轮询。
+
+**降级一定说出来。** 宿主没有 `ctx.jobs`，或没有 controller 服务于调用方 session 时，`gopeed_add` 照样能用：
+`jobId` 为 `""`，`jobNote` 说明原因，也就是不会有完成通知。这种情况用 `gopeed_status` 或 Webhook 通道跟进。
+
+**暂停不是失败。** 任务连续 24 小时停在 `pause` / `wait` 就停止跟踪，并以 `killed` +「task still pause,
+download NOT cancelled」结束——`failed` 只留给 API 连不上或 Gopeed 报 `error` 的情况。一直在动的下载同样在
+24 小时后停止跟踪，detail 也会说明下载本身没被动过。
+
+**插件重载与 DSH 重启：**
+
+- **插件重载（或 profile 重新挂载）**会停掉所有跟踪器。每个都 settle 成 `killed`，detail 明确写「插件已卸载、
+  下载状态未知、Gopeed 里的任务可能还在下」。这样措辞是因为插件确实再也看不到这次下载了，而 DSH 的结果词汇里
+  没有「未知」这个状态，detail 是唯一诚实的位置。
+- **DSH 重启会彻底丢失跟踪**：后台任务活在 DSH 进程里。下载本身继续在 Gopeed 里跑，`gopeed_status` 依旧看得到。
+  见「九、已知限制」。
 
 ---
 
@@ -341,6 +395,9 @@ DSH 每轮都会把每个工具的 `{name, description, parameters}` 投影进 s
 因为把真实存在的参数或合法取值藏起来，比这些字符省下的代价更大（模型会传错）。
 上表左列的 `gopeed_pause` / `gopeed_resume` / `gopeed_remove` / `gopeed_info` 是历史工具名，现在已不存在。
 
+0.3.0 的「下载完成自动唤醒」**没有增加常驻开销**：`gopeed_add` 只在 `output.schema` 里多了 `jobId` / `jobNote`，
+而 `output.schema` 不进 system prompt；`parameters` 一个字没动，所以合计仍是 **1217 字符**。
+
 ### 检测到未就绪时，工具会主动找用户
 
 用户不一定会去翻文档。所以任何工具在遇到「连不上 / 超时 / Token 不对」时，会把一条**英文分步说明**写进
@@ -399,3 +456,7 @@ DSH 每轮都会把每个工具的 `{name, description, parameters}` 投影进 s
 6. **`gopeed_control` 的 `remove` 是幂等的**：Gopeed 1.9.3 对不存在的 id 执行 `DELETE` 也回成功，所以重复删除显示「已删除」。
 7. **重启后「已就绪」是轮询 API 判断的**，如果 Gopeed 在加载界面时 API 已通，会提前报就绪（不影响使用）。
 8. **Webhook 监听只绑回环**：Gopeed 跑在 Docker 里或另一台机器上时，不额外做网络映射就推不过来。
+9. **下载跟踪不能跨 DSH 重启存活**：跟踪任务是 DSH 进程内的后台任务，DSH 重启（或插件升级）就全丢了；
+   下载本身继续在 Gopeed 里进行，`gopeed_status` 仍能看到。没有持久化、也没有「重新接管」——那需要可持久化的
+   job 后端，超出本插件的范围。插件重载至少会如实报告：每个还活着的跟踪器 settle 成 `killed`，detail 写明
+   下载状态未知。

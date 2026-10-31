@@ -7,13 +7,23 @@
  *   dsh-gopeed -> Config) take effect immediately.
  * - apply: registers six tools on ctx.tools (add / list / status / control / process / launch) plus
  *   gopeed_events, and starts the loopback webhook receiver when webhookMode is manual or auto.
- *   With webhookNotify on, an accepted event is delivered through TWO channels, neither of which
- *   writes a chat bubble: Agent.inject queues it as model-facing context for the next pre-step
- *   (it never wakes the driver and is never rendered as a user message), and a small GET route
- *   feeds the plugin's own overlay toast, so the human still sees a notice outside the chat.
+ *   With webhookNotify on, an accepted event is delivered through up to THREE channels, none of
+ *   which writes a chat bubble: a DSH background job (only for a download gopeed_add started, see
+ *   below) whose settlement becomes the harness's own completion notice, Agent.inject as the
+ *   fallback that queues one model-facing context line for the next pre-step when no job tracks
+ *   the download (it never wakes the driver and is never rendered as a user message), and a small
+ *   GET route feeding the plugin's own overlay toast, so the human still sees a notice outside
+ *   the chat.
  *   Agent.followup is deliberately not used: it opens a reply turn and renders as if the user had
  *   typed the plugin's text, which is exactly the intrusion this plugin must not commit. A WeakRef
  *   keeps no session alive.
+ * - Download wake-up: gopeed_add registers a DSH background job (kind 'gopeed') that polls the
+ *   Gopeed task every 3s (30s while the task is paused or waiting) and settles when it ends.
+ *   dsh-tool-jobs turns that settlement into its own in-session notice, so a busy agent reads it in
+ *   its next step and an idle agent is woken by a follow-up turn - the official channel, with no
+ *   user-role text authored by this plugin. The registry is optional: without ctx.jobs, gopeed_add
+ *   still works and says why there is no job. A job-tracked download also suppresses the inject
+ *   channel for that task id, because both channels carry the same completion fact.
  * - lib/api.js: HTTP and process-probing layer without any DSH dependency, so it also runs
  *   standalone under plain node.
  * - lib/webhook.js: loopback webhook receiver + ring buffer, also with no DSH dependency.
@@ -86,7 +96,7 @@ export const inject = ['tools']
  * the user they are seeing a stale UI and need to restart DSH - without this field there is nothing
  * to compare against. A missing or unreadable package.json falls back to the constant below.
  */
-const FALLBACK_VERSION = '0.2.0'
+const FALLBACK_VERSION = '0.3.0'
 
 const PLUGIN_VERSION = (() => {
   try {
@@ -105,6 +115,38 @@ const PLUGIN_VERSION = (() => {
  * Production code never reassigns these.
  */
 export const processOps = { findProcess, stopProcess, launchProcess, waitForApi, resolveExecutable }
+
+/**
+ * Cadence and hard limits of the download-tracking background job, exported as a test seam so a
+ * stub can drive the poller without waiting three seconds per tick. Production never reassigns it.
+ *
+ * A running download is polled at `pollIntervalMs`. A task in `pause` or `wait` is NOT moving, so
+ * it is polled at the much slower `slowPollIntervalMs` instead: waking the agent about a paused
+ * download every three seconds buys nothing and burns a request per tick.
+ *
+ * `maxPolls` / `maxAgeMs` are the "do not run forever" bound for a moving download (28800 polls =
+ * 24h at 3s). A stalled task is never reported as `failed`: pausing is not failing, so it gets its
+ * own budget (`maxSlowPolls` = 24h at 30s) and its own honest terminal outcome (killed, "still
+ * paused", download NOT cancelled) instead of a false failure.
+ *
+ * `maxConsecutiveFailures` is deliberately much shorter: if the Gopeed API stays unreachable for a
+ * minute, the job cannot observe the download any more, and a wake-up that says so is better than
+ * one that never arrives.
+ */
+export const jobOps = {
+  pollIntervalMs: 3000,
+  slowPollIntervalMs: 30000,
+  maxPolls: 28800,
+  maxSlowPolls: 2880,
+  maxAgeMs: 24 * 60 * 60 * 1000,
+  maxConsecutiveFailures: 20,
+}
+
+/** Producer kind of the tracking job; also the id prefix (`gopeed-<short-uuid>`). */
+const TRACKED_KIND = 'gopeed'
+
+/** Statuses that mean "the download is not moving right now" - not an error, just stalled. */
+const SLOW_STATUSES = new Set(['pause', 'wait'])
 
 /**
  * Plugin configuration.
@@ -192,15 +234,17 @@ export const Config = z.object({
     .volatile(),
   webhookNotify: z
     .boolean()
-    // On by default again: both delivery channels stay outside the chat transcript. The notice is
-    // queued as model-facing context through Agent.inject (never a user chat bubble, never a
-    // waking follow-up), and the Web UI shows it as a transient overlay toast. Nothing is written
-    // to the conversation, so enabling this cannot impersonate the user.
+    // On by default again: every delivery channel stays outside the chat transcript. The Web UI
+    // shows a transient overlay toast, and a completion no background job covers is queued as
+    // model-facing context through Agent.inject (never a user chat bubble, never a waking
+    // follow-up). A gopeed_add download is announced by its background job instead, which is also
+    // the only channel that can wake an idle agent.
     .default(true)
     .description(
       'Show a small overlay notice in the Web UI and add a one-line context note for the agent when a download ' +
-        'finishes. Needs a webhook listener (webhookMode manual or auto). It never posts a message into the chat, ' +
-        'and it never wakes an idle agent. Set false to keep events cache-only.',
+        'finishes. Needs a webhook listener (webhookMode manual or auto). A download started by gopeed_add is ' +
+        'announced by its background job instead, so it is not repeated here. Nothing is ever posted into the ' +
+        'chat, and this setting itself never wakes an idle agent. Set false to keep events cache-only.',
     )
     .volatile(),
 })
@@ -575,14 +619,21 @@ export function apply(ctx, config) {
 
   // ---------------------------------------------------------------------------------------------
   // Proactive notice path. The webhook receiver runs with no tool call attached, so "a download
-  // finished" can only be surfaced if the plugin remembers an Agent. Two channels are used and
-  // neither one writes a chat bubble:
+  // finished" can only be surfaced if the plugin remembers an Agent. Three channels are used and
+  // none of them writes a chat bubble:
   //
-  // 1) Agent.inject: queues the notice as model-facing context for the next pre-step. It does NOT
-  //    wake the driver and is not rendered as a user message. Nothing appears in the chat.
-  // 2) A GET route (registered on ctx.connection when the Web carrier is available) feeds a
+  // 1) The DSH background job registered by gopeed_add (see the next section). Its settlement
+  //    becomes dsh-tool-jobs' own completion notice - the harness text, delivered in-session, with
+  //    a follow-up turn on an idle owner. This is the only channel that can WAKE an agent, and it
+  //    only exists for downloads this plugin started itself.
+  // 2) Agent.inject: queues one line of model-facing context for the next pre-step. It does NOT
+  //    wake the driver and is not rendered as a user message. Nothing appears in the chat. It is
+  //    the FALLBACK for a completion no job covers: a download started in the Gopeed UI or by
+  //    another client, or any download on a host without ctx.jobs. When a job does cover the task
+  //    id, this channel stays silent for it - both would otherwise say the same thing twice.
+  // 3) A GET route (registered on ctx.connection when the Web carrier is available) feeds a
   //    transient overlay toast rendered by client.js, so the human still gets a visible notice
-  //    outside the conversation.
+  //    outside the conversation. The toast is independent of both agent channels above.
   //
   // Agent.followup is deliberately absent: it opens a reply turn and renders as a message the user
   // supposedly wrote. That is the plugin occupying the user's seat, and it is forbidden here.
@@ -615,6 +666,456 @@ export function apply(ctx, config) {
       // A host that does not hand out Agents, or no WeakRef support: stay silent, tools still work.
     }
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // Download-completion background job.
+  //
+  // A download is long-running work with a natural end, which is exactly what the DSH job registry
+  // models. Registering one buys the only official "wake the agent" channel this plugin has: when
+  // the job settles, dsh-tool-jobs emits its own in-session notice, so a BUSY owner reads it in its
+  // next step and an IDLE owner is woken by a follow-up turn. The notice text belongs to the
+  // harness; nothing here writes a user-role message, so no chat bubble is drawn and the user is
+  // not impersonated.
+  //
+  // Channel ownership: a job covers exactly the downloads gopeed_add started. The webhook toast
+  // stays independent (it is human-facing and also covers downloads this plugin did not start),
+  // and the inject channel stays as the fallback for a completion no job covers. The webhook
+  // inject path checks `jobCoversTask` below and stays silent for a task id a job owns, because a
+  // real session proved that both channels otherwise deliver the same completion twice.
+  //
+  // ctx.jobs is an OPTIONAL service. A host that composes no jobs provider (or no controller that
+  // serves this owner's session) must still run every gopeed tool, so resolution happens per call
+  // and every failure degrades to "no jobId plus a note", never to a failed gopeed_add.
+  //
+  // Ownership: the job is registered for the calling agent's session, which is what routes the
+  // completion notice back to that agent. Without a session id there is no owner and the registry
+  // would create an unowned job that no notice ever mentions, so that case is treated as degraded.
+  //
+  // The job polls Gopeed through the SAME client the tools use, so it inherits the token, timeout
+  // and auto-detected-port handling. It owns one timer, settles exactly once, and is cancelled from
+  // gopeed_control remove, from the age/poll cap, and from plugin unload - a removed download can
+  // never leave an orphan poller behind. Timers are unref'ed so a pending job cannot keep the DSH
+  // process alive.
+  // ---------------------------------------------------------------------------------------------
+
+  /** taskId -> tracking record for downloads this plugin is following right now. */
+  const downloadJobs = new Map()
+
+  /**
+   * taskId -> epoch ms until which the webhook inject channel must stay silent for that task.
+   *
+   * A finished download reaches this plugin twice: the job poller observes the terminal state and
+   * dsh-tool-jobs emits its own notice, and Gopeed's webhook posts DOWNLOAD_DONE at the same moment.
+   * Delivering both put the same sentence into the model context twice. The job notice is the
+   * richer and the only waking channel, so it wins for a task a job ever covered; the inject
+   * channel then only serves completions no job can see. The window covers the webhook's own
+   * latency and the merge debounce, and costs nothing after it expires.
+   */
+  const jobCoveredTasks = new Map()
+  /** How long a tracked task id keeps the inject channel silent, measured from its last update. */
+  const JOB_DEDUP_WINDOW_MS = 10 * 60 * 1000
+
+  /** Remember that a job owns this task id, and prune expired entries while doing it. */
+  const markJobCovered = (taskId) => {
+    if (!taskId) return
+    try {
+      const now = Date.now()
+      for (const [id, until] of jobCoveredTasks) {
+        if (until <= now) jobCoveredTasks.delete(id)
+      }
+      jobCoveredTasks.set(String(taskId), now + JOB_DEDUP_WINDOW_MS)
+    } catch {
+      // Bookkeeping only: never let it break a job or the receiver.
+    }
+  }
+
+  /** Whether a background job covers this task id, so inject must not repeat its completion. */
+  const jobCoversTask = (taskId) => {
+    if (!taskId) return false
+    const until = jobCoveredTasks.get(String(taskId))
+    if (until === undefined) return false
+    if (until <= Date.now()) {
+      jobCoveredTasks.delete(String(taskId))
+      return false
+    }
+    return true
+  }
+
+  /** Resolve ctx.jobs without assuming the Context exposes a property getter for it. */
+  const resolveJobService = () => lookupService(ctx, 'jobs')
+
+  /** Session id of the calling agent, or '' when this host hands out no usable Agent. */
+  const sessionIdOf = (exec) => {
+    try {
+      const id = exec?.agent?.session?.id
+      return typeof id === 'string' ? id : ''
+    } catch {
+      return ''
+    }
+  }
+
+  /** One-line label fragment: names arrive from Gopeed and may contain newlines or runs of spaces. */
+  const labelText = (value, limit = 80) => {
+    const text = String(value ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    return text.length > limit ? `${text.slice(0, limit - 1)}...` : text
+  }
+
+  /** File name of a URL path, without the query string; '' when the URL cannot be parsed. */
+  const urlBasename = (url) => {
+    try {
+      const last = new URL(String(url)).pathname.split('/').filter(Boolean).pop() || ''
+      return decodeURIComponent(last)
+    } catch {
+      return ''
+    }
+  }
+
+  /**
+   * Producer body: follow one Gopeed task until it is done, failed, gone, or out of budget.
+   * Called synchronously by the registry inside start(); everything after the first tick runs on
+   * its own timer, and `done` settles exactly once.
+   * @param {any} job JobHandle (id, append, updateProgress).
+   * @param {{taskId: string, name: string, url: string}} task Download accepted by Gopeed.
+   * @param {{jobId: string, owner: string, cancel?: Function}} tracking Record shared with the map.
+   */
+  const runTrackedDownload = (job, task, tracking) => {
+    // Gopeed may not have assigned a display name yet on the very first ticks, so fall back to the
+    // URL's file name (the same fragment the job label uses) before the bare task id.
+    const displayName = () => labelText(task.name || urlBasename(task.url) || task.taskId, 120)
+    let settled = false
+    let timer = null
+    /** Status reads at full cadence; the moving-download budget counts these. */
+    let fastPolls = 0
+    /** Status reads at the slow cadence (task paused or waiting); counted against its own budget. */
+    let slowPolls = 0
+    let failures = 0
+    const startedAt = Date.now()
+    let resolveDone
+    const done = new Promise((resolve) => {
+      resolveDone = resolve
+    })
+
+    /** Stop the pending tick, if any. */
+    const stopTimer = () => {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+    }
+
+    /** Settle once: forget the map entry, stop polling, hand the terminal outcome to the registry. */
+    const finish = (outcome) => {
+      if (settled) return
+      settled = true
+      stopTimer()
+      if (downloadJobs.get(task.taskId) === tracking) downloadJobs.delete(task.taskId)
+      // Keep the inject channel silent for this task after settlement too: the webhook that reports
+      // the same completion can arrive seconds later, and a just-deleted map entry would let it
+      // through as a duplicate.
+      markJobCovered(task.taskId)
+      resolveDone(outcome)
+    }
+
+    /** Append one model-facing line to the ring, then settle. A closed ring must not break this. */
+    const settleWithLine = (outcome, line) => {
+      try {
+        job.append(`${line}\n`)
+      } catch {
+        // The registry already closed the ring (teardown race); the outcome still has to land.
+      }
+      finish(outcome)
+    }
+
+    /**
+     * Arm the next tick. unref() keeps a pending download from pinning the DSH process open.
+     * `intervalMs` defaults to the moving-cadence; a paused/waiting task passes the slow one.
+     * @param {number} [intervalMs] Delay before the next status read.
+     */
+    const schedule = (intervalMs = jobOps.pollIntervalMs) => {
+      if (settled) return
+      timer = setTimeout(() => {
+        timer = null
+        poll().catch(() => {})
+      }, intervalMs)
+      timer.unref?.()
+    }
+
+    /** One status read. Every exit either settles or re-arms the timer. */
+    const poll = async () => {
+      if (settled) return
+      let snapshot = null
+      let failure = ''
+      try {
+        snapshot = normalizeTask(await client.get(task.taskId))
+      } catch (error) {
+        // A removed task is normal rather than an error: the download was cancelled outside this
+        // plugin (Gopeed UI, gopeed_control) and the job must converge instead of polling to the cap.
+        if (isTaskGoneError(error)) {
+          settleWithLine(
+            { status: 'killed', detail: `Gopeed no longer has task ${task.taskId} (removed)` },
+            `Download cancelled: ${displayName()} - Gopeed no longer has task ${task.taskId}.`,
+          )
+          return
+        }
+        failure = asciiText(error?.message || error)
+      }
+
+      if (failure) {
+        failures += 1
+        if (failures >= jobOps.maxConsecutiveFailures) {
+          settleWithLine(
+            {
+              status: 'failed',
+              detail: `Gopeed unreachable ${failures} times: ${labelText(failure, 200)}`,
+            },
+            `Download tracking failed: ${displayName()} - Gopeed was unreachable ${failures} times (${labelText(failure, 200)}). ` +
+              'The download itself was NOT cancelled; check Gopeed and gopeed_status.',
+          )
+          return
+        }
+        // A Gopeed restart can move the auto-detected port. Re-detect at the first failure and then
+        // sparsely (a process probe spawns tasklist, so it must not run on every tick); a configured
+        // fixed port needs no re-detection at all.
+        if (Number(config.port.get()) === 0 && (failures === 1 || failures % 20 === 0)) {
+          try {
+            await ensureApiPort(true)
+          } catch {
+            // Detection failure only delays the next attempt; the failure counter still applies.
+          }
+        }
+      } else {
+        failures = 0
+        if (snapshot.status === 'done') {
+          const size = formatBytes(snapshot.sizeBytes)
+          settleWithLine(
+            { status: 'completed', detail: `downloaded ${size}` },
+            `Download finished: ${labelText(snapshot.name || task.taskId, 120)} (${size}) -> ${snapshot.path || '(no path)'}`,
+          )
+          return
+        }
+        if (snapshot.status === 'error') {
+          settleWithLine(
+            { status: 'failed', detail: 'Gopeed reported status error' },
+            `Download failed: ${labelText(snapshot.name || task.taskId, 120)} (${formatBytes(snapshot.sizeBytes)}) -> ` +
+              `${snapshot.path || '(no path)'}. Gopeed reported status error.`,
+          )
+          return
+        }
+        try {
+          job.updateProgress(
+            `${snapshot.status}${snapshot.sizeKnown ? ` ${snapshot.percent}%` : ''} ` +
+              `${formatBytes(snapshot.downloadedBytes)}${snapshot.sizeKnown ? ` / ${formatBytes(snapshot.sizeBytes)}` : ''}`,
+          )
+        } catch {
+          // Progress is cosmetic; a rejected update must not stop the poll loop.
+        }
+      }
+
+      // A paused or waiting task is not moving: poll it far less often, and keep those reads out of
+      // the moving-download budget. A failed read has no status, so it stays on the fast cadence,
+      // where noticing a recovery quickly is what matters.
+      const stalled = snapshot !== null && SLOW_STATUSES.has(snapshot.status)
+      if (stalled) slowPolls += 1
+      else fastPolls += 1
+
+      // Hard budget: 24h of age, or the poll budget matching the cadence in use. A moving download
+      // that hits it settles as failed; a stalled one settles as killed with an explicit "still
+      // paused" detail, because a paused download is NOT a failed download. Either way the Gopeed
+      // task keeps running independently of this job.
+      const ageMs = Date.now() - startedAt
+      const budgetSpent = stalled ? slowPolls >= jobOps.maxSlowPolls : fastPolls >= jobOps.maxPolls
+      if (budgetSpent || ageMs >= jobOps.maxAgeMs) {
+        const stage = snapshot ? snapshot.status : 'unknown'
+        const polled = stalled ? slowPolls : fastPolls
+        if (stalled) {
+          settleWithLine(
+            {
+              status: 'killed',
+              detail: `stopped tracking after ${polled} slow polls; task still ${stage}, download NOT cancelled`,
+            },
+            `Download tracking stopped: ${displayName()} - still ${stage} after ${polled} slow polls. ` +
+              'The download was NOT cancelled; it is still paused and can be resumed with gopeed_control.',
+          )
+        } else {
+          settleWithLine(
+            {
+              status: 'failed',
+              detail: `gave up after ${polled} polls (last status ${stage})`,
+            },
+            `Download still ${stage} after ${polled} polls, so tracking stopped. The download itself was NOT cancelled; check gopeed_status.`,
+          )
+        }
+        return
+      }
+
+      schedule(stalled ? jobOps.slowPollIntervalMs : jobOps.pollIntervalMs)
+    }
+
+    schedule()
+
+    return {
+      /**
+       * Stop polling and settle as killed.
+       *
+       * The registry's kill() calls this with the reason alone and then appends that same reason to
+       * the terminal detail itself, so this hook must not repeat it - the default detail is generic
+       * and the reason lives in the model-facing ring line. A direct caller (plugin unload, or the
+       * fallback when the registry refuses to kill) passes its own detail, and no reason is
+       * appended anywhere, so the two paths never produce "because X; because X".
+       * @param {string} reason Short reason, also used for the ring line.
+       * @param {string} [detail] Terminal detail; overrides the generic "stopped at the plugin's request".
+       */
+      cancel(reason, detail) {
+        const why = labelText(reason || 'cancelled', 160)
+        const terminal =
+          detail === undefined ? "stopped at the plugin's request" : labelText(detail, 240)
+        settleWithLine(
+          { status: 'killed', detail: terminal },
+          `Download tracking stopped: ${displayName()} - ${why}.`,
+        )
+      },
+      done,
+    }
+  }
+
+  /**
+   * Register the background job that follows one freshly created Gopeed task.
+   * @param {any} exec Tool run context (owning session + creating call id).
+   * @param {{taskId: string, name: string, url: string}} task Download just accepted by Gopeed.
+   * @returns {{jobId: string, note: string}} `jobId` is '' when this host cannot host a job, and
+   *   `note` then says why in one ASCII sentence.
+   */
+  const startDownloadJob = (exec, task) => {
+    const jobs = resolveJobService()
+    if (!jobs || typeof jobs.start !== 'function') {
+      return {
+        jobId: '',
+        note:
+          'No background-job service is available on this host, so this download is not tracked and no ' +
+          'completion notice will wake the agent. Use gopeed_status, or the webhook notice when Gopeed posts one.',
+      }
+    }
+    const owner = sessionIdOf(exec)
+    if (!owner) {
+      return {
+        jobId: '',
+        note:
+          'The calling agent exposes no session id, so an owned job could not be registered and no ' +
+          'completion notice would reach it. Use gopeed_status to follow this download.',
+      }
+    }
+
+    const tracking = { jobId: '', owner, cancel: null, taskId: task.taskId }
+    const label = labelText(`download ${task.name || urlBasename(task.url) || task.taskId}`)
+    // JobSpec.toolCall is optional; attach the real call identity only when the dispatch provides it.
+    const toolCall =
+      typeof exec?.callId === 'string' && typeof exec?.rootCallId === 'string'
+        ? { callId: exec.callId, rootCallId: exec.rootCallId }
+        : null
+
+    try {
+      const jobId = jobs.start({
+        kind: TRACKED_KIND,
+        label,
+        owner,
+        ...(toolCall ? { toolCall } : {}),
+        run: (job) => {
+          const hooks = runTrackedDownload(job, task, tracking)
+          tracking.cancel = hooks.cancel
+          return hooks
+        },
+      })
+      tracking.jobId = String(jobId ?? '')
+      if (!tracking.jobId) {
+        return {
+          jobId: '',
+          note:
+            'The job registry returned no id, so this download is not tracked and no completion notice ' +
+            'will wake the agent. Use gopeed_status to follow it.',
+        }
+      }
+      downloadJobs.set(task.taskId, tracking)
+      // Ownership starts now, not at settlement: the toast stays, but the inject copy of this
+      // download's completion is suppressed from the first tick onward.
+      markJobCovered(task.taskId)
+      return { jobId: tracking.jobId, note: '' }
+    } catch (error) {
+      // Most commonly the registry has no attached controller for this owner. gopeed_add must keep
+      // working, so this is a reported degradation, not a thrown tool error.
+      return {
+        jobId: '',
+        note:
+          `A background job could not be started (${labelText(asciiText(error?.message || error), 200)}), so no ` +
+          'completion notice will wake the agent. Use gopeed_status, or the webhook notice when Gopeed posts one.',
+      }
+    }
+  }
+
+  /**
+   * Stop tracking one Gopeed task, if this plugin is tracking it.
+   * The registry's kill() is preferred because it records cause 'kill' and forwards the reason to
+   * the producer; a registry that refuses (or is gone) falls back to the producer's own cancel so
+   * the timer still stops.
+   * @param {string} taskId Gopeed task id.
+   * @param {string} reason Human-readable reason, forwarded to the job.
+   * @param {any} exec Tool run context of the caller (its session authorizes kill()).
+   * @returns {string} The job id that was cancelled, or '' when nothing was tracked.
+   */
+  const cancelDownloadJob = (taskId, reason, exec) => {
+    const tracking = downloadJobs.get(taskId)
+    if (!tracking) return ''
+    let killed = false
+    try {
+      const jobs = resolveJobService()
+      const owner = sessionIdOf(exec) || tracking.owner
+      if (jobs && typeof jobs.kill === 'function' && tracking.jobId) {
+        jobs.kill(tracking.jobId, owner, reason)
+        killed = true
+      }
+    } catch {
+      killed = false
+    }
+    if (!killed) {
+      try {
+        tracking.cancel?.(reason)
+      } catch {
+        // The producer may already be gone; dropping the record is still the right cleanup.
+      }
+    }
+    downloadJobs.delete(taskId)
+    return tracking.jobId
+  }
+
+  // Unloading (a profile reload, or a config remount) must not leave pollers behind: the registry
+  // outlives this plugin, so stopping every timer is this plugin's own responsibility. Each live
+  // record is settled as killed.
+  //
+  // Why settle at all, rather than just dropping the timers: an abandoned record would stay
+  // `running` in job_list for the rest of the session and the agent's own job guidance tells it to
+  // collect exactly that kind of record. Why the explicit detail rather than the registry's kill():
+  // a plugin unload says NOTHING about the download. The Gopeed task keeps downloading while this
+  // plugin is gone, so a bare "killed" would tell the agent a download failed when it did not. The
+  // JobOutcome vocabulary has no "unknown" status (only completed / killed / failed), so the
+  // honest place to say it is the terminal detail. dsh-jobs offers no way for a producer to settle
+  // without announcing it - it only skips cause 'teardown', which belongs to owner/service
+  // disposal, not to a producer stopping - so the wording carries the meaning instead.
+  const UNLOAD_STOP_REASON = 'plugin unloaded, so tracking stopped; the download state is now unknown'
+  const UNLOAD_STOP_DETAIL =
+    'plugin unloaded: tracking stopped, download state unknown (the Gopeed task may still be running; check gopeed_status)'
+
+  ctx.effect?.(() => () => {
+    const live = Array.from(downloadJobs.values())
+    downloadJobs.clear()
+    for (const tracking of live) {
+      try {
+        tracking.cancel?.(UNLOAD_STOP_REASON, UNLOAD_STOP_DETAIL)
+      } catch {
+        // One broken producer must not keep the others' timers alive.
+      }
+    }
+  })
 
   /** Merge window: events accepted within this window are delivered as one message. */
   const NOTIFY_DEBOUNCE_MS = 3000
@@ -688,6 +1189,11 @@ export function apply(ctx, config) {
    * already in the ring buffer, so a failed injection must stay a silent miss rather than an HTTP
    * error at the receiver.
    *
+   * This is the fallback channel, not the primary one: a download started through gopeed_add is
+   * owned by its background job, whose settlement dsh-tool-jobs announces itself (and which can
+   * wake an idle agent). Inject only covers what that job cannot: downloads started elsewhere and
+   * hosts without ctx.jobs. queueNotification() enforces the split per task id.
+   *
    * Why inject and not followup: inject is documented as "queue model-facing context for the next
    * pre-step without waking the driver". It does not open a turn and is never rendered as a chat
    * message from the user. The user-role shape is the only prompt-shaped wire format available for
@@ -724,11 +1230,18 @@ export function apply(ctx, config) {
   /**
    * Queue one accepted event and arm the debounce timer. Called after the event is already stored,
    * so every early return here means "cache only", which is exactly the old behaviour.
+   *
+   * A task id a background job covers returns early: that job's settlement already becomes the
+   * harness's completion notice, which reaches the same agent with more detail and is the only one
+   * that can wake an idle owner. Injecting here as well would put the same download into the model
+   * context twice. The overlay toast is recorded before this call, so the human still sees it.
    * @param {object} event Public event record from the receiver.
    */
   const queueNotification = (event) => {
     try {
       if (!notifyEnabled()) return
+      // The job channel owns this download; do not repeat it as injected context.
+      if (jobCoversTask(event.taskId)) return
       // No agent has used a gopeed tool yet (or it is gone): degrade to silent caching.
       if (!liveAgent()) return
       if (pendingNotifications.length < MAX_NOTIFY_EVENTS) pendingNotifications.push(event)
@@ -1227,13 +1740,18 @@ export function apply(ctx, config) {
       schema: {
         type: 'object',
         additionalProperties: false,
-        required: ['taskId', 'url', 'name', 'path', 'baseUrl'],
+        // jobId / jobNote describe the optional background tracking job. They live in output.schema
+        // only, which is never projected into the system prompt, so the 1217-character tool
+        // definition budget is untouched (parameters are unchanged).
+        required: ['taskId', 'url', 'name', 'path', 'baseUrl', 'jobId', 'jobNote'],
         properties: {
           taskId: { type: 'string', description: 'Task id returned by Gopeed.' },
           url: { type: 'string', description: 'Submitted URL.' },
           name: { type: 'string', description: 'Task name; empty when not given.' },
           path: { type: 'string', description: 'Download directory; empty when not given.' },
           baseUrl: { type: 'string', description: 'Base URL used for this request.' },
+          jobId: { type: 'string', description: 'Background job id; empty when none could be started.' },
+          jobNote: { type: 'string', description: 'Why no job tracks this download; empty on success.' },
         },
       },
       render: (_args, value) =>
@@ -1242,7 +1760,10 @@ export function apply(ctx, config) {
           `URL: ${value.url}`,
           value.name ? `Name: ${value.name}` : undefined,
           value.path ? `Save dir: ${value.path}` : undefined,
-          `Check progress with gopeed_status (${value.baseUrl}).`,
+          value.jobId
+            ? `Tracking job: ${value.jobId}. A completion notice reaches this session when the download ends; read it with job_output ${value.jobId}.`
+            : value.jobNote,
+          value.jobId ? undefined : `Check progress with gopeed_status (${value.baseUrl}).`,
         ]),
       presentationMeta: (_args, value) => ({ taskId: value.taskId }),
     },
@@ -1262,7 +1783,19 @@ export function apply(ctx, config) {
       const taskName = optString(args?.name)
       try {
         const taskId = await client.create({ url, path: path || undefined, name: taskName || undefined })
-        return { taskId, url, name: taskName, path, baseUrl: client.baseUrl() }
+        // Registration happens AFTER Gopeed accepted the task, so a rejected add never leaves a job
+        // tracking a download that does not exist. A missing/unusable job service degrades to
+        // jobId '' plus the one-line note, and gopeed_add still succeeds.
+        const tracked = startDownloadJob(exec, { taskId, name: taskName, url })
+        return {
+          taskId,
+          url,
+          name: taskName,
+          path,
+          baseUrl: client.baseUrl(),
+          jobId: tracked.jobId,
+          jobNote: tracked.note,
+        }
       } catch (error) {
         fail('add', error, exec)
       }
@@ -1404,12 +1937,17 @@ export function apply(ctx, config) {
         // Gopeed 1.9.3 answers code:1000 task not found for a finished or removed task.
         // That is normal rather than a tool error, so report it as-is.
         if (isTaskGoneError(error)) {
+          // The task is already gone, so a tracking job for it can never observe a transition:
+          // converge it now instead of letting it poll to the cap.
+          const cancelled = cancelDownloadJob(id, 'Gopeed no longer has this task', exec)
           return {
             ok: false,
             id,
             action,
             status: '',
-            message: `Gopeed no longer has this task (usually finished or removed, code=${error.code}); nothing to ${spec.verb}.`,
+            message:
+              `Gopeed no longer has this task (usually finished or removed, code=${error.code}); nothing to ${spec.verb}.` +
+              (cancelled ? ` Tracking job ${cancelled} cancelled.` : ''),
           }
         }
         fail('control', error, exec)
@@ -1421,7 +1959,20 @@ export function apply(ctx, config) {
       } catch {
         status = ''
       }
-      return { ok: true, id, action, status, message: `${spec.done}.${status ? ` Current status: ${status}.` : ''}` }
+      // A removed download has no future settlement to observe, so its tracking job is cancelled
+      // here. pause/resume leave the job alone: the download may still finish later.
+      let jobNote = ''
+      if (action === 'remove') {
+        const cancelled = cancelDownloadJob(id, 'removed by gopeed_control', exec)
+        if (cancelled) jobNote = ` Tracking job ${cancelled} cancelled.`
+      }
+      return {
+        ok: true,
+        id,
+        action,
+        status,
+        message: `${spec.done}.${status ? ` Current status: ${status}.` : ''}${jobNote}`,
+      }
     },
   })
 

@@ -9,6 +9,64 @@ project README lives in [docs/README.zh.md](docs/README.zh.md).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-31
+
+### Added
+
+- **Download wake-up through DSH background jobs.** `gopeed_add` now registers the task it just created as a
+  DSH background job (`kind: "gopeed"`, id `gopeed-<16 hex>`), which polls Gopeed every 3 seconds and settles
+  when the download ends (`completed` with the file size, `failed` on a Gopeed `error` status or an unreachable
+  API, `killed` when the task disappears). The settlement is consumed by DSH's `dsh-tool-jobs`, which emits its
+  own in-session completion notice: a **busy** agent reads it in its next step, an **idle** agent is woken with a
+  follow-up turn. This is the harness's notice, not plugin-authored user text -- the plugin never impersonates
+  the user, and no chat bubble is drawn. It is the difference between this channel and the two older ones:
+  `Agent.followup` (removed) would have opened a turn with a user-role message, and `Agent.inject` (kept as a
+  fallback) queues context for the next step but cannot wake an idle agent.
+- **`jobId` / `jobNote` on `gopeed_add`.** `jobId` names the tracking job, and the tool's own output points at
+  `job_output <jobId>`. They live in `output.schema` only, which DSH does not project into the system prompt, so
+  the seven tool definitions still total **1217 characters**; `parameters` are unchanged.
+- **Graceful degradation.** Without a `ctx.jobs` service, or without a controller serving the calling session,
+  `gopeed_add` still works: `jobId` is `""` and `jobNote` says why no completion notice will arrive. A rejected
+  job never fails the download.
+- **Cancellation on removal.** `gopeed_control action: "remove"` cancels the tracking job, and a task reachable
+  no longer (Gopeed answers `code: 1000`) converges the same way instead of polling to the cap.
+
+### Changed
+
+- **Three notification channels instead of two, with no duplicate delivery.** The overlay toast is unchanged and
+  still independent of the agent. `Agent.inject` (`source: { kind: "dsh-gopeed" }`, no chat bubble) is now the
+  **fallback**, used only for a completion no job covers -- a download started in the Gopeed UI or by another
+  client, or any download on a host without `ctx.jobs`. A task a background job owns is deliberately **not**
+  injected, because the job notice already carries the same completion and a real session showed the model
+  reading it twice. `webhookNotify` now controls only the toast and inject channels.
+- **Paused tasks are polled slowly.** A task in `pause` or `wait` is polled every 30 seconds instead of every 3,
+  and those reads are counted against their own budget, not the moving-download one.
+- **Version badges report 0.3.0.** The browser bundle constant and the packaged `version` moved together, so the
+  settings-page badge still matches `gopeed_process.pluginVersion` and does not tell users to restart DSH for no
+  reason.
+
+### Fixed
+
+- **A paused download could be reported as failed.** A task that stayed `pause` / `wait` used to consume the
+  full-speed poll budget and settle as `failed` after 24 hours, although nothing had failed. Stalled tasks now
+  settle as `killed` with an explicit "task still pause, download NOT cancelled" detail, keeping `failed` for an
+  unreachable API or a Gopeed `error` status.
+- **A plugin reload reported downloads as failed.** Unloading cancels every tracker, and the settled jobs said
+  only "cancelled", which reads like the download died. The detail now states that the plugin unloaded, that the
+  download state is unknown, and that the Gopeed task may still be running. DSH's job outcome vocabulary has no
+  "unknown" status and offers no way for a producer to settle silently (it skips only `cause: "teardown"`, which
+  belongs to owner/service disposal), so the detail carries the truth. A DSH **restart** still loses tracking
+  entirely; that is documented in Known limitations rather than papered over.
+- **The terminal detail repeated its own reason.** A `kill()` forwards the reason to the producer, and the
+  registry appends it again, so the detail read "removed by gopeed_control; removed by gopeed_control". The
+  producer now contributes a generic detail on that path and the reason appears once.
+
+### Documentation
+
+- README gained **Download wake-up (background jobs)** and the notification section became **Three notification
+  channels, none in the conversation**; `docs/README.zh.md` mirrors both. Known limitations gained the
+  "tracking does not survive a DSH restart" entry.
+
 ## [0.2.1] - 2026-10-31
 
 ### Fixed

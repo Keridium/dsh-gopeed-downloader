@@ -1,6 +1,12 @@
-# dsh-gopeed
+<p align="center">
+  <img src="icon.svg" width="88" height="88" alt="dsh-gopeed">
+</p>
 
-English | [Chinese](docs/README.zh.md)
+<h1 align="center">dsh-gopeed</h1>
+
+<p align="center">
+  English | <a href="docs/README.zh.md">Chinese</a>
+</p>
 
 Turn a local **[Gopeed](https://gopeed.com/)** downloader into agent tools inside **DeepSeek Harness (DSH)**, with a settings page for the API host, port and token.
 
@@ -19,7 +25,8 @@ Downloads never pass through the model or a shell: the agent hands a URL to Gope
 - **Seven tools** -- `gopeed_add`, `gopeed_list`, `gopeed_status`, `gopeed_control` (pause / resume / remove through an `action` enum), `gopeed_process` (is Gopeed alive, stuck or misconfigured -- also reports the version and webhook status), `gopeed_launch` (start it if it is not running), and `gopeed_events` (read the download-complete events Gopeed pushed, or write the webhook config in `auto` mode). No tool can restart or kill Gopeed.
 - **Small system-prompt footprint** -- the model-facing `{name, description, parameters}` of all seven tools is 1217 characters (roughly 305 tokens at about 4 characters per token), down from 2714 across nine tools. See [System-prompt footprint](#system-prompt-footprint).
 - **Settings page in the DSH Web UI** -- host, port, token, request timeout, an optional executable path, the port scan switch and the three webhook fields. Every field is *volatile*: saving applies immediately, with no plugin remount and no DSH restart. The token is a secret field, so the browser only ever sees "set" / "not set", never the value back. A version badge shows the loaded browser bundle next to the backend version reported by `gopeed_process`.
-- **Download-complete notifications** -- Gopeed pushes `DOWNLOAD_DONE` / `DOWNLOAD_ERROR` to a loopback listener, which feeds a bottom-right toast and a one-line context note for the agent. Neither channel writes a chat message, and neither wakes an idle agent. See [Download notifications](#download-notifications-webhook).
+- **Download wake-up** -- `gopeed_add` registers a DSH background job that follows the new task and settles when the download ends. That settlement becomes DSH's **own** completion notice: a busy agent reads it in its next step, and an **idle agent is woken with a follow-up turn**. The notice text belongs to the harness -- the plugin never writes a user-role message. See [Download wake-up](#download-wake-up-background-jobs).
+- **Download-complete notifications** -- Gopeed pushes `DOWNLOAD_DONE` / `DOWNLOAD_ERROR` to a loopback listener, which feeds a bottom-right toast, and -- for a download no background job covers -- a one-line context note for the agent. Neither writes a chat message. See [Download notifications](#download-notifications-webhook).
 - **One restart path, and it belongs to the user** -- the red **Restart Gopeed** button on the settings page. It force-kills the process, waits until the pid is really gone, starts Gopeed again and waits for its API. It does not touch the webhook config. No agent tool can reach it.
 - **Honest diagnostics instead of guesses** -- `gopeed_process` returns one of `running`, `unresponsive`, `misconfigured`, `stopped`, `unauthorized` or `unknown`, and never reports "not running" when the process probe itself was blocked.
 - **Reachable without reading docs** -- when a tool hits a connection, timeout or token failure, it appends a one-time setup notice to **its own output** (see [Guiding the user](#guiding-the-user)), instead of assuming anyone opened this file. Nothing is ever posted into the conversation on the user's behalf.
@@ -121,7 +128,7 @@ A live "request base URL" preview shows `http://host:port` above the form. Savin
 
 | Tool | Parameters | Returns | Purpose |
 |---|---|---|---|
-| `gopeed_add` | `url` (required), `path`, `name` | `taskId`, `url`, `name`, `path`, `baseUrl` | Create a download task. `path` is the save directory; `name` is an optional display name (Gopeed otherwise derives one from the URL). |
+| `gopeed_add` | `url` (required), `path`, `name` | `taskId`, `url`, `name`, `path`, `baseUrl`, `jobId`, `jobNote` | Create a download task. `path` is the save directory; `name` is an optional display name (Gopeed otherwise derives one from the URL). `jobId` is the background job tracking this download (empty when the host cannot host one), and `jobNote` then says why. |
 | `gopeed_list` | `status` (optional: `ready`/`running`/`pause`/`wait`/`error`/`done`) | `count` + normalized task array | List all tasks, optionally filtered. |
 | `gopeed_status` | `id` | one normalized task | Progress of a single task. |
 | `gopeed_control` | `id` + `action` (`pause`/`resume`/`remove`), optional `force` | `{ ok, id, action, status, message }` | Pause, resume or delete. |
@@ -209,20 +216,33 @@ plugin or DSH restart. `gopeed_events` filters them by:
 **Returning events marks them read**, so a second call with `unreadOnly: true` returns nothing until new events
 arrive. `gopeed_process` also reports the webhook status, so the wiring can be checked without reading the buffer.
 
-### Two notification channels, neither in the conversation
+### Three notification channels, none in the conversation
 
-With `webhookNotify` on (the default), an accepted event is delivered twice:
+A finished download can reach the agent through three channels, and none of them writes a chat message:
 
-- **A bottom-right toast** rendered by the plugin's own client half. The page polls an authenticated
-  `GET /api/dsh-gopeed/notifications` route; each toast disappears after 6 seconds. It never marks the receiver
-  buffer as read, so `gopeed_events` still reports the same unread count.
-- **`Agent.inject`**: the same summary is queued as model-facing context for the agent's **next** turn. It does
-  **not** wake the agent and is never rendered as a chat message.
+1. **The background job -- primary, and the only channel that can wake an agent.** `gopeed_add` registers a
+   DSH job for the task it just created; the job polls Gopeed and settles when the download ends. DSH's own
+   `dsh-tool-jobs` turns that settlement into an in-session completion notice (busy agent: next step; idle
+   agent: woken with a follow-up turn). The notice belongs to the harness, so nothing is authored in the
+   user's voice. See [Download wake-up](#download-wake-up-background-jobs).
+2. **The bottom-right toast -- always, and human-facing.** It is rendered by the plugin's own client half. The
+   page polls an authenticated `GET /api/dsh-gopeed/notifications` route; each toast disappears after 6
+   seconds. It never marks the receiver buffer as read, so `gopeed_events` still reports the same unread
+   count.
+3. **`Agent.inject` -- the fallback, for a completion no job covers.** That means a download started in the
+   Gopeed UI or by another client, or any download on a host whose composition has no `ctx.jobs`. The same
+   summary is queued as model-facing context for the agent's **next** pre-step; it does **not** wake the
+   agent and is never rendered as a chat message. A task a job owns is deliberately **not** injected: both
+   channels carried the same completion, and a real session showed the model reading it twice.
 
-**The plugin no longer posts messages into the conversation.** The old `Agent.followup` and
+`webhookNotify` (default on) controls channels 2 and 3. Channel 1 follows `gopeed_add` and needs no webhook
+at all, so a download started by the agent is still reported when `webhookMode` is `off`.
+
+**The plugin never posts messages into the conversation.** The old `Agent.followup` and
 `ToolRunContext.deferContext` paths are gone: both delivered plugin text as a `role: 'user'` message, which made it
-look as if the user had typed it. Guidance now travels inside the tool's own output, and download notices use the
-toast and `inject` channels only. Set `webhookNotify: false` to keep events cache-only.
+look as if the user had typed it. Guidance now travels inside the tool's own output; download notices use the
+channels above, and the waking one is DSH's, not the plugin's. Set `webhookNotify: false` to keep webhook
+events cache-only (channel 1 is unaffected).
 
 ### Restarting Gopeed
 
@@ -238,6 +258,46 @@ with `action: "apply"` in `auto` mode, or your own manual entries in `manual` mo
 
 A plain `taskkill` (without `/F`) only posts a close message, which Gopeed answers by minimizing to the tray; the
 process survives and the command still exits 0. That is why stopping is always forced here.
+
+## Download wake-up (background jobs)
+
+Polling `gopeed_status` is the wrong way to wait for a download: it burns a step per check, and the agent has
+nothing to react to when the file finally lands. So `gopeed_add` also registers the download as a **DSH
+background job** (`kind: 'gopeed'`, id `gopeed-<16 hex>`), and DSH reports it when it ends.
+
+What that means in practice:
+
+- `gopeed_add` returns `jobId`, and its own output names the job together with the matching `job_output` call.
+- The job polls the Gopeed task every 3 seconds. While the task is `pause` or `wait` it slows to every 30
+  seconds: a paused download is not progress, and polling it hard buys nothing.
+- On completion the job settles as `completed` with the file size in the detail; on a Gopeed `error` status as
+  `failed`; when the task disappears from Gopeed as `killed` (removed outside the plugin).
+- `dsh-tool-jobs` then delivers **its own** completion notice -- `background job gopeed-... (gopeed: download
+  x.iso) finished [status: completed, ...]`. A busy agent reads it in its next step; an idle agent is woken by a
+  follow-up turn. This is the official DSH mechanism (`ctx.jobs` plus `dsh-tool-jobs` completion notices),
+  **not** a user message the plugin forged, and nothing is added to the transcript by the plugin.
+- `gopeed_control` with `action: "remove"` cancels the tracking job, so a removed download never leaves an
+  orphan poller behind.
+- `job_output <jobId>` (optionally with `wait: true`) reads the job and blocks up to the configured timeout. Use
+  it to collect a job before the final answer instead of busy-polling.
+
+**Degradation is reported, never silent.** Without a `ctx.jobs` service -- or without a controller that serves
+the calling session -- `gopeed_add` still works: `jobId` is `""` and `jobNote` says why, so no completion notice
+will arrive. Follow the download with `gopeed_status`, or with the webhook channel, in that case.
+
+**A stalled task is not a failed task.** A task that stays `pause` / `wait` for 24 hours stops being tracked and
+is reported as `killed` with "task still pause, download NOT cancelled"; `failed` is reserved for an unreachable
+API or a Gopeed `error` status. A still-moving download also stops being tracked after 24 hours, and its detail
+says the download itself was not touched either way.
+
+### Plugin reloads and DSH restarts
+
+- **A plugin reload (or a profile remount)** stops every tracker. Each one settles as `killed` with a detail
+  saying the download state is now unknown and the Gopeed task may still be running. That wording is deliberate:
+  the plugin can no longer observe the download, and DSH's outcome vocabulary has no "unknown" status, so the
+  detail is the only honest place to say it.
+- **A DSH restart loses tracking entirely**, because the jobs live inside the DSH process. The download keeps
+  running in Gopeed and `gopeed_status` still sees it. See [Known limitations](#known-limitations).
 
 ## Diagnostics and launching
 
@@ -287,7 +347,7 @@ Steps 3-5 share **one** PowerShell call (`Get-Process` plus `Get-ItemProperty` p
 
 Users do not read documentation before trying a tool. So when any tool hits a connection failure, a timeout or a bad token, it appends a short English step-by-step notice to **that tool's own result** (an error message, or `gopeed_process.advice`): install Gopeed, open its protocol settings and pin the port, match the token. It is appended **at most once per plugin lifetime**, and a failure to build it never masks the tool's own error. Task-level errors -- an unknown id, for example -- deliberately do **not** trigger the notice.
 
-Nothing the plugin says is written into the conversation as a user message. The earlier `followup` / `deferContext` mechanisms are removed for that reason; see [Two notification channels](#two-notification-channels-neither-in-the-conversation).
+Nothing the plugin says is written into the conversation as a user message. The earlier `followup` / `deferContext` mechanisms are removed for that reason; see [Three notification channels](#three-notification-channels-none-in-the-conversation).
 
 ### Sandbox vs. plugin runtime
 
@@ -358,6 +418,10 @@ DSH projects every tool's `{name, description, parameters}` into the system prom
 
 What changed: three verbs collapsed into one `action` enum, `gopeed_info` folded into `gopeed_process`, `gopeed_launch` lost its `restart` parameter, descriptions cut to a fragment that never repeats the `gopeed_` prefix, parameter descriptions dropped except `path` (a wrong "file instead of directory" would silently download to the wrong place), and `additionalProperties: false` left out of the parameter schemas to match the shape `defineTool` produces (validation happens in `execute` instead). The one piece of meaning that cannot live in a name -- `force` deletes files -- is carried by `gopeed_control`'s description. The schema skeleton (names, `required` arrays, enum values) is deliberately untouched: it is what DSH validates, so shrinking it further would drop parameters, not characters. **No download capability was removed** -- only the entry points were consolidated. The measured total is **1217 characters, 117 over the original 1100 target**: `gopeed_events` accounts for 225 of them, and the rest of the overage is the deliberate decision to keep `name`, both value enums and the `required` arrays, because hiding a real parameter or a legal value costs more in wrong calls than those characters save. The names in the left column (`gopeed_pause`, `gopeed_resume`, `gopeed_remove`, `gopeed_info`) are historical and no longer exist as tools.
 
+The download wake-up in 0.3.0 cost **zero** prompt characters: `gopeed_add` gained `jobId` / `jobNote` in its
+`output.schema` only, and that schema is not projected into the system prompt. Its `parameters` are untouched, so
+the total is still **1217**.
+
 ## Known limitations
 
 1. **A forced restart interrupts downloads.** That is why it is a user-triggered button and not a tool. The failure paths are reported by stage; the success path must not be expected to preserve in-flight progress.
@@ -368,6 +432,7 @@ What changed: three verbs collapsed into one `action` enum, `gopeed_info` folded
 6. **`remove` is idempotent.** Gopeed 1.9.3 answers a `DELETE` for an unknown id with success, so deleting twice still reports "removed".
 7. **Readiness after a restart is inferred by polling the API,** so a Gopeed that already serves requests while still showing a loading screen is reported ready early. Harmless.
 8. **The webhook listener binds loopback only.** A Gopeed running in Docker, or on another machine, cannot push to it without extra networking.
+9. **Download tracking does not survive a DSH restart.** A tracking job lives in the DSH process, so restarting DSH (or upgrading the plugin) drops every tracker; the downloads themselves continue inside Gopeed and are still visible to `gopeed_status`. There is no persistence and no re-attach -- that would need a durable job backend, which is out of scope. A plugin reload at least reports the loss: each live tracker settles as `killed` with a detail saying the download state is unknown.
 
 ## See also
 
