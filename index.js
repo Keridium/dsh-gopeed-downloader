@@ -13,7 +13,12 @@
  *
  * Language: every string an agent can read is English - tool name / description, parameter and
  * output.schema descriptions, render() text, execute() fields and error messages. Chinese
- * documentation lives in the repository (README.zh.md, docs/GETTING-STARTED.md), not in code.
+ * documentation lives in the repository (docs/README.zh.md, docs/GETTING-STARTED.md), not in code.
+ *
+ * Tool definitions are also kept minimal: DSH projects {name, description, parameters} into the
+ * system prompt on every turn, so descriptions are fragments that never repeat the `gopeed_`
+ * prefix, and parameter descriptions are omitted entirely. The only meaning that cannot live in a
+ * parameter name - `force` deletes files - is carried by gopeed_control's description.
  *
  * Newcomer guidance (installing Gopeed, setting up the protocol and token) must never enter the
  * tool definitions: those stay in the system prompt for every turn. It only appears at runtime -
@@ -28,6 +33,8 @@ import z from '@deepseek-ai/schemastery'
 import {
   createGopeedClient,
   describeTask,
+  discoverApiPort,
+  findListeningPorts,
   findProcess,
   formatBytes,
   isTaskGoneError,
@@ -63,16 +70,24 @@ export const Config = z.object({
   port: z
     .number()
     .step(1)
-    .min(1)
+    .min(0)
     .max(65535)
-    .default(9999)
-    .description('Gopeed API port, default 9999.')
+    .default(0)
+    .description(
+      'Gopeed API port. 0 (default) = auto-detect: Gopeed\'s desktop build listens on 127.0.0.1:0, a random ' +
+        'port per launch, so the plugin asks Windows which port the running process actually holds. Set a ' +
+        'number only to pin a specific port.',
+    )
     .volatile(),
   token: z
     .string()
     .role('secret')
-    .default('deepseek')
-    .description('Gopeed API token (Settings -> Advanced -> Token); sent in the X-Api-Token header.')
+    .default('')
+    .description(
+      'Gopeed API token, sent as X-Api-Token. Gopeed ships with an EMPTY token, which disables auth; ' +
+        'leave this blank to match. If you set a token in Gopeed -> Settings -> Advanced, enter the exact ' +
+        'same value here.',
+    )
     .volatile(),
   timeoutMs: z
     .number()
@@ -90,6 +105,15 @@ export const Config = z.object({
         '(%LOCALAPPDATA%\\Programs\\Gopeed\\Gopeed.exe, %LOCALAPPDATA%\\Gopeed\\Gopeed.exe) -> auto-discovery ' +
         '(running process -> registry -> Start Menu/desktop shortcuts -> common install paths). Set it only when a ' +
         'portable or non-standard install makes auto-discovery fail.',
+    )
+    .volatile(),
+  portScan: z
+    .boolean()
+    .default(false)
+    .description(
+      'Off by default. When true, the plugin may sweep the local dynamic port range to locate Gopeed when Windows ' +
+        'will not disclose another process sockets. That touches ports belonging to unrelated software, so enable it ' +
+        'only if you accept that; otherwise enter the fixed port Gopeed shows under Settings -> Advanced -> Protocol.',
     )
     .volatile(),
 })
@@ -165,14 +189,53 @@ function textBlock(lines) {
  * @param {any} config Resolved config (volatile fields are read live through .get()).
  */
 export function apply(ctx, config) {
+  // Gopeed listens on 127.0.0.1:0 by default, so both its pid AND its port change on every
+  // launch. Nothing here caches the pid: each detection re-reads it from the live process.
+  let autoPort = 0
+  let autoPortPid = 0
+  let autoPortAt = 0
+
   const client = createGopeedClient({
     resolve: () => ({
       host: config.host.get(),
-      port: config.port.get(),
+      // A detected port wins over the configured one: the configured value may be stale after
+      // Gopeed restarted on a new random port.
+      port: autoPort > 0 ? autoPort : Number(config.port.get()) || 0,
       token: config.token.get(),
       timeoutMs: config.timeoutMs.get(),
     }),
   })
+
+  /**
+   * Resolve the port to talk to: the configured one, or the port the running process actually
+   * holds. Returns 0 when detection is impossible (no process, or the OS view is restricted).
+   * @param {boolean} [force] Skip the configured value and detect even when a port is configured.
+   */
+  const ensureApiPort = async (force = false) => {
+    const configured = Number(config.port.get())
+    // The cache is keyed by pid: Gopeed picks a new pid and a new random port on every launch, so
+    // a cached port is only valid while the same process is still alive.
+    if (!force && autoPort > 0 && Date.now() - autoPortAt < 60000) {
+      const live = await findProcess(config.exePath.get() || 'Gopeed.exe')
+      if (live.found && live.pid === autoPortPid) return autoPort
+    }
+    if (configured > 0 && !force) return configured
+    const proc = await findProcess(config.exePath.get() || 'Gopeed.exe')
+    if (!proc.found) return configured > 0 ? configured : 0
+    const found = await discoverApiPort({
+      pid: proc.pid,
+      host: config.host.get(),
+      token: config.token.get(),
+      timeoutMs: Math.min(3000, config.timeoutMs.get()),
+      // Sweeping every loopback port is opt-in only; see Config.portScan.
+      scan: config.portScan.get() === true,
+    })
+    if (!found) return configured > 0 ? configured : 0
+    autoPort = found.port
+    autoPortPid = proc.pid
+    autoPortAt = Date.now()
+    return autoPort
+  }
 
   /**
    * One-off user-facing notice: when Gopeed is not installed or not configured, append a message
@@ -185,8 +248,8 @@ export function apply(ctx, config) {
   const SETUP_NOTICE = [
     '[!] Gopeed is not ready yet, so this downloader plugin cannot be used. Three steps fix it - no command line needed:',
     '1) Install Gopeed: open https://gopeed.com, download the Windows build, double-click the installer, then open Gopeed.',
-    '2) Enable the API: in Gopeed go to Settings -> Advanced -> Protocol, choose TCP, address 127.0.0.1, port 9999.',
-    '3) Share the secret: on the same page set a Token (for example deepseek), then come back to DSH -> Plugins -> Installed -> Gopeed downloader -> the gopeed row -> Config and enter the same address / port / Token, then save.',
+    '2) Pin the API port: in Gopeed open Settings -> Advanced -> Protocol, keep TCP and set the address to a fixed port, for example 127.0.0.1:9999. Gopeed defaults to port 0, a random port on every launch; the plugin can usually detect it, but pinning removes the guesswork.',
+    '3) Token (optional): if you set a token on that same page, enter the same value in DSH -> Plugins -> Installed -> Gopeed downloader -> row gopeed -> Config, with address 127.0.0.1 and the same port, then save.',
     'Tell me when that is done and I will check again.',
   ].join('\n')
 
@@ -236,11 +299,13 @@ export function apply(ctx, config) {
 
   ctx.tools.register({
     name: 'gopeed_add',
-    description: 'Create a Gopeed task; returns taskId.',
+    description: 'Create task.',
     // Note: parameters omits additionalProperties. A defineTool-compiled parameter schema is
     // only {type, properties, required}; adding additionalProperties:false would cost about 170
     // characters across six tools on every turn. Validation lives in execute (reqString /
-    // whitelists) instead.
+    // whitelists) instead. Parameter descriptions are dropped too, because the name plus the
+    // one-line tool description already pin the value down - except `path`, where "save
+    // directory" versus "file path" is a silent, wrong-download kind of mistake.
     parameters: {
       type: 'object',
       required: ['url'],
@@ -282,6 +347,7 @@ export function apply(ctx, config) {
     }),
     timeoutMs: 25000,
     async execute(args, exec) {
+      await ensureApiPort()
       const url = reqString(args?.url, 'url')
       const path = optString(args?.path)
       const taskName = optString(args?.name)
@@ -296,7 +362,7 @@ export function apply(ctx, config) {
 
   ctx.tools.register({
     name: 'gopeed_list',
-    description: 'List Gopeed tasks.',
+    description: 'List tasks.',
     parameters: {
       type: 'object',
       properties: {
@@ -329,6 +395,7 @@ export function apply(ctx, config) {
     presentCall: () => ({ card: 'generic', title: 'Gopeed tasks', kind: 'other' }),
     timeoutMs: 25000,
     async execute(args, exec) {
+      await ensureApiPort()
       const filter = optString(args?.status).toLowerCase()
       try {
         const raw = await client.list()
@@ -343,7 +410,7 @@ export function apply(ctx, config) {
 
   ctx.tools.register({
     name: 'gopeed_status',
-    description: 'Get a task by id.',
+    description: 'Task by id.',
     parameters: {
       type: 'object',
       required: ['id'],
@@ -357,6 +424,7 @@ export function apply(ctx, config) {
     presentCall: () => ({ card: 'generic', title: 'Gopeed task status', kind: 'other' }),
     timeoutMs: 25000,
     async execute(args, exec) {
+      await ensureApiPort()
       const id = reqString(args?.id, 'id')
       try {
         const task = normalizeTask(await client.get(id))
@@ -374,8 +442,10 @@ export function apply(ctx, config) {
    */
   const SETUP_GUIDE =
     'Steps: 1) If it is not installed, download and open Gopeed from https://gopeed.com. ' +
-    '2) In Gopeed open Settings -> Advanced -> Protocol and enable TCP on 127.0.0.1:9999. ' +
-    '3) Copy the Token from the same page into the DSH plugin config (Plugins -> Installed -> dsh-gopeed -> Config). ' +
+    '2) In Gopeed open Settings -> Advanced -> Protocol, keep TCP and pin the address to a fixed port such as ' +
+    '127.0.0.1:9999 (Gopeed defaults to port 0, a random port per launch; the plugin can usually detect it, but ' +
+    'pinning removes the guesswork). ' +
+    '3) If you set a Token on the same page, copy it into the DSH plugin config (Plugins -> Installed -> dsh-gopeed -> Config). ' +
     '4) Call this tool again to retry.'
 
   /** Actions supported by gopeed_control: verb drives the English text, run sends the request. */
@@ -387,14 +457,14 @@ export function apply(ctx, config) {
 
   ctx.tools.register({
     name: 'gopeed_control',
-    description: 'Pause/resume/remove a task.',
+    description: 'Pause/resume/remove; force deletes files.',
     parameters: {
       type: 'object',
       required: ['id', 'action'],
       properties: {
         id: { type: 'string' },
         action: { type: 'string', enum: ['pause', 'resume', 'remove'] },
-        force: { type: 'boolean', description: 'Delete files' },
+        force: { type: 'boolean' },
       },
     },
     output: {
@@ -409,6 +479,7 @@ export function apply(ctx, config) {
     }),
     timeoutMs: 25000,
     async execute(args, exec) {
+      await ensureApiPort()
       const id = reqString(args?.id, 'id')
       const action = reqString(args?.action, 'action').toLowerCase()
       const spec = CONTROL_ACTIONS[action]
@@ -442,7 +513,7 @@ export function apply(ctx, config) {
 
   ctx.tools.register({
     name: 'gopeed_process',
-    description: 'Diagnose Gopeed.',
+    description: 'Diagnose.',
     parameters: { type: 'object', properties: {} },
     output: {
       schema: {
@@ -471,7 +542,7 @@ export function apply(ctx, config) {
         properties: {
           verdict: {
             type: 'string',
-            enum: ['running', 'unresponsive', 'stopped', 'unauthorized', 'unknown'],
+            enum: ['running', 'unresponsive', 'stopped', 'misconfigured', 'unauthorized', 'unknown'],
             description: 'Overall verdict.',
           },
           apiState: {
@@ -533,14 +604,26 @@ export function apply(ctx, config) {
     isConcurrencySafe: () => true,
     presentCall: () => ({ card: 'generic', title: 'Gopeed diagnostics', kind: 'other' }),
     timeoutMs: 30000,
-    async execute() {
+    async execute(_args, exec) {
+      let detectedPort = await ensureApiPort()
       const options = {
         host: config.host.get(),
-        port: config.port.get(),
+        port: detectedPort || Number(config.port.get()) || 0,
         token: config.token.get(),
         timeoutMs: Math.min(4000, config.timeoutMs.get()),
       }
-      const api = await probeApi(options)
+      let api = await probeApi(options)
+      // The configured port may be stale (Gopeed listens on a random port after a restart).
+      // When nothing answers there, ask the OS which port the live process actually holds and
+      // retry once. This is what makes "zero configuration" work despite a stale patch value.
+      if (api.state === 'refused') {
+        const probed = await ensureApiPort(true)
+        if (probed > 0 && probed !== options.port) {
+          detectedPort = probed
+          options.port = probed
+          api = await probeApi(options)
+        }
+      }
       // Process probing, executable resolution and /info are independent, so run them in
       // parallel to keep total latency down. /info is only asked for when the API already
       // answers (this is where the old gopeed_info version data comes from).
@@ -562,8 +645,23 @@ export function apply(ctx, config) {
         advice =
           'The port is reachable but the process is not responding, so Gopeed is probably stuck: call gopeed_launch with restart=true to force a restart.'
       } else if (api.state === 'refused') {
-        verdict = 'stopped'
-        advice = 'Gopeed is not running: use gopeed_launch to start it (same as double-clicking the icon).'
+        // A refused connection has two very different causes. When the process is verifiably
+        // alive, telling the user "Gopeed is not running" sends them to the wrong fix: the real
+        // problem is the port. Gopeed defaults to address `127.0.0.1:0`, i.e. a random port per
+        // launch, so an untouched install is never reachable on a fixed port.
+        if (proc.probe === 'ok' && proc.found) {
+          verdict = 'misconfigured'
+          const scanHint = config.portScan.get() === true
+            ? 'The optional port scan is enabled but nothing that answers like Gopeed was found.'
+            : 'Windows will not let this process read another process sockets, and the optional port scan is off by design.'
+          advice =
+            `Gopeed is running (pid ${proc.pid}) but its API port could not be determined: ${api.baseUrl} does not answer. ` +
+            `${scanHint} Open Gopeed -> Settings -> Advanced -> Protocol, read the fixed port shown there ` +
+            '(Gopeed uses a random port by default), then set "port" in the plugin config to that value.'
+        } else {
+          verdict = 'stopped'
+          advice = 'Gopeed is not running: use gopeed_launch to start it (same as double-clicking the icon).'
+        }
       } else if (api.state === 'unauthorized') {
         verdict = 'unauthorized'
         advice = 'The process is fine, the token is wrong: set the plugin config token to the one configured in Gopeed.'
@@ -587,6 +685,9 @@ export function apply(ctx, config) {
       if (api.state === 'refused' || api.state === 'error') {
         advice += `\nIf Gopeed is not installed or not configured yet: ${SETUP_GUIDE}`
       }
+      // A diagnosis that ends in "not usable" is exactly when the person needs the notice, so
+      // the diagnostic tool raises it too; notifySetupNeeded de-duplicates per plugin instance.
+      if (verdict !== 'running' && verdict !== 'unauthorized') notifySetupNeeded(exec)
 
       return {
         verdict,
@@ -619,7 +720,7 @@ export function apply(ctx, config) {
 
   ctx.tools.register({
     name: 'gopeed_launch',
-    description: 'Start/restart Gopeed.',
+    description: 'Start/restart.',
     parameters: {
       type: 'object',
       properties: {
@@ -654,6 +755,7 @@ export function apply(ctx, config) {
     }),
     timeoutMs: 40000,
     async execute(args, exec) {
+      await ensureApiPort()
       const restart = args?.restart === true
       const base = {
         host: config.host.get(),
