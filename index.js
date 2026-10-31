@@ -2,11 +2,35 @@
  * dsh-gopeed - exposes the Gopeed downloader REST API as DSH agent tools.
  *
  * Layout:
- * - Config: host / port / token / timeoutMs / exePath, all `.volatile()`, so edits in the DSH
- *   settings UI (Plugins -> Installed -> dsh-gopeed -> Config) take effect immediately.
- * - apply: registers six tools on ctx.tools (add / list / status / control / process / launch).
+ * - Config: host / port / token / timeoutMs / exePath / portScan / webhookMode / webhookPort /
+ *   webhookNotify, all `.volatile()`, so edits in the DSH settings UI (Plugins -> Installed ->
+ *   dsh-gopeed -> Config) take effect immediately.
+ * - apply: registers six tools on ctx.tools (add / list / status / control / process / launch) plus
+ *   gopeed_events, and starts the loopback webhook receiver when webhookMode is manual or auto.
+ *   With webhookNotify on, an accepted event is delivered through TWO channels, neither of which
+ *   writes a chat bubble: Agent.inject queues it as model-facing context for the next pre-step
+ *   (it never wakes the driver and is never rendered as a user message), and a small GET route
+ *   feeds the plugin's own overlay toast, so the human still sees a notice outside the chat.
+ *   Agent.followup is deliberately not used: it opens a reply turn and renders as if the user had
+ *   typed the plugin's text, which is exactly the intrusion this plugin must not commit. A WeakRef
+ *   keeps no session alive.
  * - lib/api.js: HTTP and process-probing layer without any DSH dependency, so it also runs
  *   standalone under plain node.
+ * - lib/webhook.js: loopback webhook receiver + ring buffer, also with no DSH dependency.
+ *
+ * Sandbox policy (strategy 3): the two actions that change the machine - starting Gopeed and
+ * stopping it - go through the optional `ctx.sandbox` service and obey the session's file policy;
+ * every read-only diagnostic (process table, sockets, executable lookup, loopback API probe) stays
+ * direct, because a restricted token routinely cannot see another process and a blind diagnosis is
+ * worse than an honestly labelled one. Both outcomes are reported, never silently degraded: a
+ * sandbox that refuses fails the action, and a host without a sandbox runs it and says so.
+ * `lib/` stays free of DSH imports: confinement is injected as a plain function per call.
+ *
+ * Hard rule for Gopeed config: exactly one code path may write it (PUT /api/v1/config) - the
+ * `action` branch of gopeed_events, which first refuses unless webhookMode is auto. Nothing in
+ * apply(), in a timer, or on any automatic path writes config: `off` and `manual` never do, and
+ * `auto` only writes when the user explicitly calls that action. Reading config (GET) is allowed
+ * anywhere.
  *
  * Tool definitions are plain ToolDefinition objects (what defineTool compiles to), so the plugin
  * does not need to import @deepseek-ai/dsh-tools at runtime - one less resolution dependency.
@@ -21,15 +45,17 @@
  * parameter name - `force` deletes files - is carried by gopeed_control's description.
  *
  * Newcomer guidance (installing Gopeed, setting up the protocol and token) must never enter the
- * tool definitions: those stay in the system prompt for every turn. It only appears at runtime -
- * in the failure branch's return value (SETUP_GUIDE -> advice / message), or as a single
- * SETUP_NOTICE user message injected through deferContext.
+ * tool definitions: those stay in the system prompt for every turn. It only appears at runtime,
+ * inside the tool's own output - the failure branch's return value (SETUP_GUIDE -> advice /
+ * message) or one longer SETUP_NOTICE appended to an error / the diagnostic advice. Nothing the
+ * plugin says is ever posted as a chat message on the user's behalf: no followup, no deferContext.
  *
  * Encoding: this file must stay UTF-8 without BOM. Do not batch-edit it in PowerShell 5.1:
  * Get-Content -Raw / Set-Content decode UTF-8 as GBK and destroy non-ASCII characters such as
  * -> - [!] (recovering requires a full rewrite). Use an editor or Node's fs instead.
  */
 import z from '@deepseek-ai/schemastery'
+import { readFileSync } from 'node:fs'
 import {
   createGopeedClient,
   describeTask,
@@ -45,12 +71,40 @@ import {
   stopProcess,
   waitForApi,
 } from './lib/api.js'
+import { createWebhookReceiver, mergeWebhookUrls } from './lib/webhook.js'
 
 /** Plugin name used by the Loader for diagnostics. */
 export const name = 'dsh-gopeed'
 
 /** Required Host service: the tool registry. */
 export const inject = ['tools']
+
+/**
+ * Version of the installed plugin package, read once from this plugin's own package.json.
+ * The browser half of the plugin is only loaded when DSH starts, so after an upgrade the page can
+ * still run an older UI bundle. gopeed_process reports this backend version so the agent can tell
+ * the user they are seeing a stale UI and need to restart DSH - without this field there is nothing
+ * to compare against. A missing or unreadable package.json falls back to the constant below.
+ */
+const FALLBACK_VERSION = '0.2.0'
+
+const PLUGIN_VERSION = (() => {
+  try {
+    const raw = readFileSync(new URL('./package.json', import.meta.url), 'utf8')
+    const version = JSON.parse(raw)?.version
+    if (typeof version === 'string' && version.trim()) return version.trim()
+  } catch {
+    // A packaged or partially copied install may not expose package.json; keep the constant.
+  }
+  return FALLBACK_VERSION
+})()
+
+/**
+ * Test seam for the restart path: the process helpers are looked up at call time so a test can
+ * replace them with counting stubs and exercise a restart without touching a real Gopeed process.
+ * Production code never reassigns these.
+ */
+export const processOps = { findProcess, stopProcess, launchProcess, waitForApi, resolveExecutable }
 
 /**
  * Plugin configuration.
@@ -116,6 +170,39 @@ export const Config = z.object({
         'only if you accept that; otherwise enter the fixed port Gopeed shows under Settings -> Advanced -> Protocol.',
     )
     .volatile(),
+  webhookMode: z
+    .union(['off', 'manual', 'auto'])
+    .default('off')
+    .description(
+      'Download-complete push events. off (default) = listen on no port at all. manual = listen and show the URL, ' +
+        'which you then add yourself in Gopeed -> Settings -> Advanced -> Webhook push. auto = listen too, and the ' +
+        'gopeed_events action=apply step may write that URL into Gopeed config when you explicitly ask for it.',
+    )
+    .volatile(),
+  webhookPort: z
+    .number()
+    .step(1)
+    .min(0)
+    .max(65535)
+    .default(0)
+    .description(
+      'Loopback port used by webhookMode manual/auto. 0 (default) = a free port chosen by the system; the real ' +
+        'listener URL is always reported by gopeed_events. If the port is already taken the listener fails loudly.',
+    )
+    .volatile(),
+  webhookNotify: z
+    .boolean()
+    // On by default again: both delivery channels stay outside the chat transcript. The notice is
+    // queued as model-facing context through Agent.inject (never a user chat bubble, never a
+    // waking follow-up), and the Web UI shows it as a transient overlay toast. Nothing is written
+    // to the conversation, so enabling this cannot impersonate the user.
+    .default(true)
+    .description(
+      'Show a small overlay notice in the Web UI and add a one-line context note for the agent when a download ' +
+        'finishes. Needs a webhook listener (webhookMode manual or auto). It never posts a message into the chat, ' +
+        'and it never wakes an idle agent. Set false to keep events cache-only.',
+    )
+    .volatile(),
 })
 
 /** Output schema of a normalized task (descriptions stay English, matching the tool definitions). */
@@ -154,6 +241,10 @@ const TASK_SCHEMA = {
   },
 }
 
+/** Status values the gopeed_list filter accepts. Kept out of the tool schema: the definition
+ * budget is hard, and execute() validates and reports the full list on a typo. */
+const TASK_STATUSES = ['ready', 'running', 'pause', 'wait', 'error', 'done']
+
 /** Result envelope for a single task. */
 const TASK_RESULT_SCHEMA = {
   type: 'object',
@@ -184,6 +275,41 @@ function textBlock(lines) {
   return [{ type: 'text', text: lines.filter((line) => line !== undefined).join('\n') }]
 }
 
+/** One event accepted from a Gopeed webhook push. */
+const EVENT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['event', 'at', 'taskId', 'name', 'status', 'path', 'sizeBytes'],
+  properties: {
+    event: { type: 'string', enum: ['DOWNLOAD_DONE', 'DOWNLOAD_ERROR'], description: 'Event type.' },
+    at: { type: 'integer', description: 'Event time in ms since epoch.' },
+    taskId: { type: 'string', description: 'Gopeed task id.' },
+    name: { type: 'string', description: 'Task name.' },
+    status: { type: 'string', description: 'Task status carried by the event.' },
+    path: { type: 'string', description: 'Save directory; may be empty.' },
+    sizeBytes: { type: 'integer', description: 'Total bytes; 0 when unknown.' },
+  },
+}
+
+/** Result of gopeed_events: either the recent events, or the outcome of the config-write action. */
+const EVENTS_RESULT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['mode', 'action', 'listener', 'listening', 'count', 'unread', 'events', 'applied', 'message'],
+  properties: {
+    mode: { type: 'string', enum: ['off', 'manual', 'auto'], description: 'Webhook mode in effect.' },
+    action: { type: 'string', description: 'apply (config write); empty for a read.' },
+    listener: { type: 'string', description: 'Listener URL; empty when nothing is listening.' },
+    listening: { type: 'boolean', description: 'Whether the receiver is listening right now.' },
+    count: { type: 'integer', description: 'Events returned by this call.' },
+    unread: { type: 'integer', description: 'Events that were unread before this call.' },
+    events: { type: 'array', items: EVENT_SCHEMA },
+    applied: { type: 'boolean', description: 'Whether Gopeed webhook config was written by this call.' },
+    listenerUrl: { type: 'string', description: 'URL written into Gopeed config (apply only).' },
+    message: { type: 'string', description: 'Human-readable result, or why nothing was done.' },
+  },
+}
+
 /**
  * @param {import('@deepseek-ai/cordis').Context} ctx Plugin context.
  * @param {any} config Resolved config (volatile fields are read live through .get()).
@@ -205,6 +331,216 @@ export function apply(ctx, config) {
       timeoutMs: config.timeoutMs.get(),
     }),
   })
+
+  // ---------------------------------------------------------------------------------------------
+  // Sandbox seam (strategy 3): actions go through the sandbox, diagnostics stay direct.
+  //
+  // `ctx.sandbox` is an OPTIONAL dependency. It is mounted by the profile's `include:sandbox`
+  // row, but a host without it must still load this plugin and register all seven tools, so the
+  // service is resolved through ctx.inject and its absence is a reported fact, not a load error.
+  //
+  // What is confined: the exact argv that starts Gopeed and the `taskkill` that stops it. Both
+  // write to the machine, so the session's file policy governs them. What is NOT confined: the
+  // read-only diagnostics (tasklist / powershell Get-Process / netstat / Get-NetTCPConnection /
+  // netsh / existsSync / the loopback fetch). A restricted token often cannot see another
+  // process's entry or sockets, which would turn "I cannot see it" into the false verdict
+  // "Gopeed is not running" - and every gopeed_process result says so explicitly.
+  //
+  // The policy rides the call: `ctx.sandboxPolicy.resolve({ session })` is re-read per action, so
+  // a runtime mode switch applies without remounting anything. When no policy service is composed
+  // the policy package's own fail-safe defaults are used (read-only, process.cwd()).
+  // ---------------------------------------------------------------------------------------------
+
+  /** Live optional services; null while the corresponding dependency is absent. */
+  const sandboxRuntime = { sandbox: null, policy: null }
+
+  /** ASCII guard: the seam's own error text carries non-ASCII punctuation, ours must not. */
+  const asciiText = (value) => String(value ?? '').replace(/[^\x20-\x7e]/g, '-')
+
+  /** Strip trailing sentence punctuation so composed messages never end in "..". */
+  const trimPeriod = (value) => String(value ?? '').replace(/[\s.]+$/, '')
+
+  /** Look a service up without assuming the Context exposes a property getter for it. */
+  const lookupService = (scoped, name) => {
+    try {
+      if (scoped && typeof scoped.get === 'function') {
+        const found = scoped.get(name)
+        if (found) return found
+      }
+      const direct = scoped?.[name]
+      return direct || null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Resolve the file policy for one action. The calling session makes its own cwd the
+   * workspace-write boundary; a call without a session (the config-page restart button) falls back
+   * to the deployment policy, exactly as the official consumers do.
+   * @param {any} exec Tool run context, or undefined for a browser-route action.
+   */
+  const resolveSandboxPolicy = (exec) => {
+    const service = sandboxRuntime.policy
+    const session = exec?.agent?.session
+    if (service && typeof service.resolve === 'function') {
+      try {
+        const resolved = service.resolve(session === undefined ? {} : { session })
+        if (resolved && typeof resolved === 'object' && typeof resolved.mode === 'string') {
+          return {
+            mode: resolved.mode,
+            workspaceRoot:
+              typeof resolved.workspaceRoot === 'string' && resolved.workspaceRoot
+                ? resolved.workspaceRoot
+                : process.cwd(),
+            ...(resolved.sessionId === undefined ? {} : { sessionId: resolved.sessionId }),
+          }
+        }
+      } catch (error) {
+        ctx.logger?.warn?.(`dsh-gopeed: sandbox policy resolution failed: ${asciiText(error?.message || error)}`)
+      }
+    }
+    // No policy service: mirror the policy package's documented fail-safe defaults instead of
+    // guessing a wider mode. The action then honestly fails if that mode denies it.
+    return { mode: 'read-only', workspaceRoot: process.cwd() }
+  }
+
+  /**
+   * Build the per-call confinement function handed to lib/api.js. It never throws for a policy
+   * refusal: a refusal is a `blocked` decision, because lib/ has no DSH types to catch.
+   *
+   * Outcomes:
+   * - `status: 'confined'`     argv wrapped, execution obeys the sandbox;
+   * - `status: 'unavailable'`  no sandbox service on this host: run, but report it;
+   * - `status: 'full-access'`  the user's policy is danger-full-access: run unconfined by policy;
+   * - `status: 'denied'`       sandbox present but cannot confine: block, report, never run.
+   * @param {any} exec Tool run context, or undefined for a browser-route action.
+   */
+  const makeConfiner = (exec) => async (argv, purpose) => {
+    const sandbox = sandboxRuntime.sandbox
+    const policy = resolveSandboxPolicy(exec)
+    const action = purpose === 'stop' ? 'stopping Gopeed' : 'starting Gopeed'
+    if (!sandbox || typeof sandbox.confine !== 'function') {
+      return {
+        argv,
+        sandboxed: false,
+        status: 'unavailable',
+        // No policy governed this execution, so reporting a mode here would be a lie.
+        mode: '',
+        enforcement: '',
+        detail:
+          `No sandbox service is available on this host, so ${action} ran with the DSH host's own ` +
+          'permissions and was NOT confined by any file policy.',
+      }
+    }
+    if (policy.mode === 'danger-full-access') {
+      // The official consumers never consult the provider under danger-full-access.
+      return {
+        argv,
+        sandboxed: false,
+        status: 'full-access',
+        mode: policy.mode,
+        enforcement: '',
+        detail:
+          `The file policy in effect is danger-full-access, so ${action} ran without confinement ` +
+          'by that policy.',
+      }
+    }
+    try {
+      const confined = await sandbox.confine(argv, policy, exec?.signal)
+      const wrapped = Array.isArray(confined?.argv) ? confined.argv : null
+      if (!wrapped || wrapped.length === 0) {
+        return {
+          argv,
+          sandboxed: false,
+          blocked: true,
+          status: 'denied',
+          mode: policy.mode,
+          enforcement: '',
+          detail:
+            `The sandbox returned no runnable command for ${action}, so nothing was executed. ` +
+            'Retry after the sandbox backend is repaired, or use the plugin config page manually.',
+        }
+      }
+      return {
+        argv: wrapped,
+        sandboxed: true,
+        status: 'confined',
+        mode: policy.mode,
+        enforcement: String(confined?.enforcement ?? ''),
+        detail:
+          `${action} ran confined by the sandbox under the "${policy.mode}" file policy ` +
+          `(enforcement: ${String(confined?.enforcement ?? 'unknown')}).`,
+      }
+    } catch (error) {
+      const code = asciiText(error?.code ?? error?.name ?? 'unknown')
+      const unavailable = String(error?.code ?? '') === 'SANDBOX_UNAVAILABLE'
+      const manual =
+        purpose === 'stop'
+          ? 'stop Gopeed yourself with Task Manager'
+          : 'start Gopeed yourself by double-clicking its icon'
+      const detail = unavailable
+        ? `The sandbox refused to run ${action}: the "${policy.mode}" mode has no usable backend on ` +
+          `this host (SANDBOX_UNAVAILABLE). Nothing was started or stopped. Repair the sandbox ` +
+          `backend (or switch the file policy to danger-full-access) and retry, or ${manual}. ` +
+          'The config page Restart button uses this same sandbox, so it cannot bypass the refusal.'
+        : `The sandbox refused to run ${action} (${code}): ${asciiText(error?.message || error)}. ` +
+          `Nothing was started or stopped. Retry after the sandbox backend is repaired, or ${manual}.`
+      return {
+        argv,
+        sandboxed: false,
+        blocked: true,
+        status: 'denied',
+        mode: policy.mode,
+        enforcement: '',
+        detail,
+      }
+    }
+  }
+
+  /**
+   * Project confinement facts into the flat fields gopeed_launch and the restart route report.
+   * A branch that never reached the sandbox passes no facts and gets an explicit empty answer.
+   * @param {object} [sandbox] Facts returned by lib/api.js.
+   */
+  const sandboxReport = (sandbox) => ({
+    launchSandboxed: Boolean(sandbox?.sandboxed),
+    sandboxMode: String(sandbox?.mode ?? ''),
+    sandboxDetail: String(sandbox?.detail ?? ''),
+  })
+
+  /** Facts for a branch that did not attempt a process action at all. */
+  const NO_LAUNCH_SANDBOX = sandboxReport({
+    sandboxed: false,
+    mode: '',
+    detail: 'No launch was attempted, so the sandbox made no decision.',
+  })
+
+  /**
+   * Track the optional sandbox dependency. The callback runs when `ctx.sandbox` appears and its
+   * effect cleanup clears the reference when the service goes away (plugin unload or profile
+   * reload), so a stale provider is never called. `ctx.sandboxPolicy` is looked up separately and
+   * may be absent without disabling confinement.
+   * @param {any} scoped Context that resolved the sandbox service.
+   */  const installSandbox = (scoped) => {
+    sandboxRuntime.sandbox = scoped?.sandbox ?? null
+    sandboxRuntime.policy = lookupService(scoped, 'sandboxPolicy')
+    const detail = sandboxRuntime.policy ? 'policy service available' : 'no policy service, read-only default'
+    ctx.logger?.info?.(`dsh-gopeed: sandbox available (${detail}); launch and stop are confined`)
+    scoped?.effect?.(() => () => {
+      sandboxRuntime.sandbox = null
+      sandboxRuntime.policy = null
+    })
+  }
+
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['sandbox'], installSandbox)
+  } else {
+    // Simplified hosts / tests without Cordis injection: use a direct lookup once.
+    const sandbox = lookupService(ctx, 'sandbox')
+    if (sandbox) installSandbox({ sandbox, effect: (fn) => ctx.effect?.(fn) })
+    else ctx.logger?.info?.('dsh-gopeed: no sandbox service; launch and stop will be reported as unconfined')
+  }
 
   /**
    * Resolve the port to talk to: the configured one, or the port the running process actually
@@ -237,13 +573,563 @@ export function apply(ctx, config) {
     return autoPort
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // Proactive notice path. The webhook receiver runs with no tool call attached, so "a download
+  // finished" can only be surfaced if the plugin remembers an Agent. Two channels are used and
+  // neither one writes a chat bubble:
+  //
+  // 1) Agent.inject: queues the notice as model-facing context for the next pre-step. It does NOT
+  //    wake the driver and is not rendered as a user message. Nothing appears in the chat.
+  // 2) A GET route (registered on ctx.connection when the Web carrier is available) feeds a
+  //    transient overlay toast rendered by client.js, so the human still gets a visible notice
+  //    outside the conversation.
+  //
+  // Agent.followup is deliberately absent: it opens a reply turn and renders as a message the user
+  // supposedly wrote. That is the plugin occupying the user's seat, and it is forbidden here.
+  //
+  // The reference is a WeakRef: the plugin must never keep a finished session alive. Every write
+  // path below is wrapped in try/catch - a disposed agent, an expired WeakRef or a throwing
+  // inject must never reach the webhook receiver, which has to keep accepting events.
+  // ---------------------------------------------------------------------------------------------
+
+  /** Most recent Agent seen by a tool execute(), or null before any gopeed tool has run. */
+  let lastAgentRef = null
+  /** When the reference above was refreshed (ms epoch); diagnostics only. */
+  let lastAgentAt = 0
+
   /**
-   * One-off user-facing notice: when Gopeed is not installed or not configured, append a message
-   * to the conversation instead of expecting the user to read the README.
+   * Remember the calling Agent. One line per execute() and never throws: a missing exec or an
+   * unusable Agent simply leaves notifications disabled.
+   * @param {any} exec Tool run context.
+   */
+  const rememberAgent = (exec) => {
+    try {
+      const agent = exec?.agent
+      // inject() is the non-waking context channel; a followup-only Agent is useless here and is
+      // therefore not remembered (it would lead straight back to a chat bubble).
+      if (agent && typeof agent === 'object' && typeof agent.inject === 'function') {
+        lastAgentRef = new WeakRef(agent)
+        lastAgentAt = Date.now()
+      }
+    } catch {
+      // A host that does not hand out Agents, or no WeakRef support: stay silent, tools still work.
+    }
+  }
+
+  /** Merge window: events accepted within this window are delivered as one message. */
+  const NOTIFY_DEBOUNCE_MS = 3000
+  /** Cap on events merged into one message; the rest are counted, not buffered forever. */
+  const MAX_NOTIFY_EVENTS = 20
+
+  /** Events accepted but not yet delivered. */
+  let pendingNotifications = []
+  /** Events dropped because the batch was full. */
+  let pendingOverflow = 0
+  /** Pending debounce timer, or null. */
+  let notifyTimer = null
+
+  /** webhookNotify in effect. Volatile, so it is read when an event arrives, not at start. */
+  const notifyEnabled = () => config.webhookNotify?.get?.() !== false
+
+  /** The remembered Agent when it is still alive and usable, otherwise undefined. */
+  const liveAgent = () => {
+    try {
+      const agent = lastAgentRef ? lastAgentRef.deref() : undefined
+      return agent && typeof agent.inject === 'function' ? agent : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** "name (size)" fragment shared by the single and the merged formats. */
+  const notificationItem = (event) =>
+    `${event.name || event.taskId || 'untitled'} (${formatBytes(event.sizeBytes)})`
+
+  /**
+   * Build the plain-ASCII message the model reads. One line per outcome keeps the merged form as
+   * compact as the single form; the `[dsh-gopeed]` prefix marks it as plugin push, not user speech.
+   * @param {object[]} batch Accepted events to merge.
+   * @param {number} overflow Events dropped from the batch.
+   */
+  const buildNotificationText = (batch, overflow) => {
+    const finished = batch.filter((event) => event.event !== 'DOWNLOAD_ERROR')
+    const failed = batch.filter((event) => event.event === 'DOWNLOAD_ERROR')
+    const lines = []
+    if (finished.length === 1) {
+      lines.push(
+        `[dsh-gopeed] Download finished: ${notificationItem(finished[0])} -> ${finished[0].path || '(no path)'}`,
+      )
+    } else if (finished.length > 1) {
+      lines.push(`[dsh-gopeed] ${finished.length} downloads finished: ${finished.map(notificationItem).join('; ')}`)
+    }
+    if (failed.length === 1) {
+      lines.push(`[dsh-gopeed] Download failed: ${notificationItem(failed[0])} -> ${failed[0].path || '(no path)'}`)
+    } else if (failed.length > 1) {
+      lines.push(`[dsh-gopeed] ${failed.length} downloads failed: ${failed.map(notificationItem).join('; ')}`)
+    }
+    if (overflow > 0) {
+      lines.push(`[dsh-gopeed] ${overflow} more download event(s) not listed; call gopeed_events for the full list.`)
+    }
+    return lines.join('\n')
+  }
+
+  /** Drop the pending timer and queue (plugin unload, receiver stop). */
+  const clearNotifications = () => {
+    if (notifyTimer) {
+      clearTimeout(notifyTimer)
+      notifyTimer = null
+    }
+    pendingNotifications = []
+    pendingOverflow = 0
+  }
+
+  /**
+   * Queue the merged batch as model-facing context with Agent.inject. Never throws: the event is
+   * already in the ring buffer, so a failed injection must stay a silent miss rather than an HTTP
+   * error at the receiver.
    *
-   * `ToolRunContext.deferContext` appends a user message after the tool result: the user sees it
-   * in the chat and the next turn's model is guaranteed to read it. It is sent at most once, and
-   * a failed injection never breaks the tool's own error path.
+   * Why inject and not followup: inject is documented as "queue model-facing context for the next
+   * pre-step without waking the driver". It does not open a turn and is never rendered as a chat
+   * message from the user. The user-role shape is the only prompt-shaped wire format available for
+   * an injected item, but it stays in context, not in the conversation.
+   */
+  const flushNotifications = () => {
+    notifyTimer = null
+    const batch = pendingNotifications
+    const overflow = pendingOverflow
+    pendingNotifications = []
+    pendingOverflow = 0
+    if (batch.length === 0) return
+    try {
+      const agent = liveAgent()
+      if (!agent) return
+      agent.inject({
+        id: `dsh-gopeed-notify-${Date.now()}`,
+        // Agent.inject only accepts a UserMessage, so role stays 'user'; the source is what names
+        // the real producer. dsh-agent's README documents exactly this: followup uses
+        // source { kind: 'user' } while a plugin's own input uses { kind: 'my-plugin' }. Using
+        // 'user' here is what made the notice render as if the user had typed it.
+        role: 'user',
+        content: [{ type: 'text', text: buildNotificationText(batch, overflow) }],
+        source: { kind: 'dsh-gopeed' },
+      })
+      ctx.logger?.debug?.(
+        `dsh-gopeed: injected ${batch.length} download event(s) as context; last agent seen ${Date.now() - lastAgentAt}ms ago`,
+      )
+    } catch {
+      // Disposed agent / throwing inject: swallow. The events stay cached and readable.
+    }
+  }
+
+  /**
+   * Queue one accepted event and arm the debounce timer. Called after the event is already stored,
+   * so every early return here means "cache only", which is exactly the old behaviour.
+   * @param {object} event Public event record from the receiver.
+   */
+  const queueNotification = (event) => {
+    try {
+      if (!notifyEnabled()) return
+      // No agent has used a gopeed tool yet (or it is gone): degrade to silent caching.
+      if (!liveAgent()) return
+      if (pendingNotifications.length < MAX_NOTIFY_EVENTS) pendingNotifications.push(event)
+      else pendingOverflow += 1
+      // One timer for the whole burst, so N events in 3s become one injected context note.
+      if (notifyTimer) return
+      notifyTimer = setTimeout(flushNotifications, NOTIFY_DEBOUNCE_MS)
+      // A pending notification must never be the reason the process stays alive.
+      notifyTimer.unref?.()
+    } catch {
+      // Never let bookkeeping break the receiver.
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Notice feed for the Web UI overlay. This is a separate delivery cursor from the agent channel:
+  // while the page is open, client.js polls GET /api/dsh-gopeed/notifications?since=<seq> and shows
+  // a transient toast. It never marks the receiver buffer as read, so a later gopeed_events call
+  // still reports the same unread count. The route is only reachable through the authenticated
+  // Connection fetch registry (owner browser Peer); it is not part of the loopback webhook port.
+  // ---------------------------------------------------------------------------------------------
+
+  /** Paths owned by this plugin on the authenticated Connection fetch registry. */
+  const NOTIFICATIONS_PATH = '/api/dsh-gopeed/notifications'
+  const RESTART_PATH = '/api/dsh-gopeed/restart'
+
+  /** How many recent notices stay available to the page. */
+  const MAX_UI_NOTICES = 20
+  /** Recent notices, oldest first. `seq` is plugin-local and monotonic. */
+  let uiNotices = []
+  let uiNoticeSeq = 0
+
+  /** Keep one compact record for the overlay toast. Never throws. */
+  const recordUiNotice = (event) => {
+    try {
+      uiNoticeSeq += 1
+      uiNotices.push({
+        seq: uiNoticeSeq,
+        event: event.event,
+        at: event.at,
+        taskId: event.taskId,
+        name: event.name,
+        path: event.path,
+        sizeBytes: event.sizeBytes,
+      })
+      while (uiNotices.length > MAX_UI_NOTICES) uiNotices.shift()
+    } catch {
+      // Never let bookkeeping break the receiver.
+    }
+  }
+
+  /**
+   * One accepted webhook event: feed the overlay, then optionally inject agent context.
+   * The overlay is independent of whether an Agent was ever seen, so a user who only enabled
+   * notifications still sees them.
+   * @param {object} event Public event record from the receiver.
+   */
+  const handleWebhookEvent = (event) => {
+    try {
+      if (!notifyEnabled()) return
+      recordUiNotice(event)
+      queueNotification(event)
+    } catch {
+      // Never let notification bookkeeping break the receiver.
+    }
+  }
+
+  /**
+   * JSON body of the notice feed for one poll.
+   * @param {string} rawUrl Request URL carrying the caller's `since` cursor.
+   */
+  const notificationFeed = (rawUrl) => {
+    const enabled = notifyEnabled() && webhookMode() !== 'off'
+    let since = 0
+    try {
+      since = Number(new URL(rawUrl).searchParams.get('since')) || 0
+    } catch {
+      since = 0
+    }
+    return {
+      enabled,
+      latest: uiNoticeSeq,
+      events: enabled ? uiNotices.filter((entry) => entry.seq > since) : [],
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Webhook receiver. This section only ever LISTENS. The single Gopeed config write in this
+  // plugin lives in gopeed_events' action branch below, and it refuses to run outside mode auto.
+  // ---------------------------------------------------------------------------------------------
+
+  /** webhookMode in effect; an unknown stored value degrades to 'off' so a typo cannot open a port. */
+  const webhookMode = () => {
+    const raw = String(config.webhookMode?.get?.() ?? 'off').trim().toLowerCase()
+    return raw === 'manual' || raw === 'auto' ? raw : 'off'
+  }
+
+  /** Requested listener port; 0 means "let the OS pick a free one". */
+  const webhookPortSetting = () => {
+    const port = Number(config.webhookPort?.get?.() ?? 0)
+    return Number.isInteger(port) && port >= 0 && port <= 65535 ? port : 0
+  }
+
+  let receiver = null
+  let receiverFailure = ''
+  let receiverStarting = null
+
+  /** Start (or reuse) the listener for the current mode. Concurrent callers share one attempt. */
+  const startReceiver = async () => {
+    const mode = webhookMode()
+    if (mode === 'off') {
+      // webhookMode is volatile: switching it off at runtime must also close the port opened
+      // earlier, otherwise "off" would keep listening until the plugin unloads.
+      if (receiver) {
+        await receiver.stop()
+        receiver = null
+        receiverFailure = ''
+      }
+      // No listener means no new events, so a queued wake-up would be stale.
+      clearNotifications()
+      return null
+    }
+    const port = webhookPortSetting()
+    if (receiver && receiver.status === 'listening' && receiver.requestedPort === port) return receiver
+    // The port setting is volatile, so an edit moves the listener instead of leaving a stale one.
+    if (receiver) {
+      await receiver.stop()
+      receiver = null
+    }
+    // Moving the listener drops any batch that was waiting for delivery.
+    clearNotifications()
+    const next = createWebhookReceiver({
+      port,
+      onEvent: (event) => {
+        ctx.logger?.debug?.(`dsh-gopeed: webhook ${event.event} for task ${event.taskId || '(no id)'}`)
+        // The event is already stored at this point; this only decides who gets told about it.
+        handleWebhookEvent(event)
+      },
+    })
+    const started = await next.start()
+    if (!started.ok) {
+      // Never pretend to listen: keep the reason for diagnostics and retry on the next call,
+      // because the conflicting port may have been released in the meantime.
+      receiverFailure = `${started.reason}: ${started.message}`
+      ctx.logger?.warn?.(`dsh-gopeed: webhook listener failed: ${receiverFailure}`)
+      return null
+    }
+    receiver = next
+    receiverFailure = ''
+    ctx.logger?.info?.(`dsh-gopeed: webhook listening at ${next.url}`)
+    return receiver
+  }
+
+  const ensureReceiver = () => {
+    if (receiverStarting) return receiverStarting
+    receiverStarting = startReceiver().finally(() => {
+      receiverStarting = null
+    })
+    return receiverStarting
+  }
+
+  // Registered even when the mode is off: webhookMode is volatile and can be switched on without
+  // a remount, so unloading the plugin must stop a listener that was started later.
+  ctx.effect?.(() => () => {
+    // Unloading must not leave a timer behind that wakes an agent of an already closed session.
+    clearNotifications()
+    const current = receiver
+    receiver = null
+    return current ? current.stop() : undefined
+  })
+
+  if (webhookMode() !== 'off') {
+    ensureReceiver().catch((error) => {
+      receiverFailure = String(error?.message || error)
+      ctx.logger?.warn?.(`dsh-gopeed: webhook listener failed: ${receiverFailure}`)
+    })
+  }
+
+  /**
+   * Stop the running Gopeed, start it again, then wait for its API.
+   *
+   * This is NOT an agent capability. The only entry point is the authenticated POST route
+   * registered below, which the "Restart Gopeed" button on the plugin config page calls. No tool
+   * (gopeed_launch included) can reach this function any more, so an agent cannot kill the
+   * downloader. The process helpers are read from processOps at call time so a test can substitute
+   * counting stubs.
+   * @param {number} apiPort Port resolved before the restart, used when re-detection fails.
+   */
+  const restartGopeed = async (apiPort) => {
+    // The config-page restart has no agent session, so the policy resolves to the deployment
+    // default. Both process actions still go through the same confiner as gopeed_launch.
+    const confine = makeConfiner(undefined)
+    const giveUp = (stage, message, sandbox) => ({
+      ok: false,
+      launched: false,
+      restarted: false,
+      pid: 0,
+      apiState: '',
+      stage,
+      message,
+      launchSandboxed: Boolean(sandbox?.sandboxed),
+      sandboxMode: String(sandbox?.mode ?? ''),
+      sandboxDetail: String(sandbox?.detail ?? ''),
+    })
+    const resolved = await processOps.resolveExecutable(config.exePath.get())
+    const proc = await processOps.findProcess(resolved.path || config.exePath.get() || 'Gopeed.exe')
+    if (proc.probe !== 'ok') {
+      return giveUp(
+        'probe',
+        `Could not restart Gopeed: the process list is unavailable here (${proc.detail}). End Gopeed manually and start it again, or double-click the icon.`,
+      )
+    }
+    if (!proc.found) {
+      return giveUp(
+        'not-running',
+        `Could not restart Gopeed: no ${proc.image} process found, so there was nothing to restart. Use gopeed_launch to start it.`,
+      )
+    }
+    // Resolve the executable BEFORE stopping: killing a process that cannot be started again would
+    // leave the user without a downloader.
+    if (!resolved.path) {
+      return giveUp(
+        'executable',
+        'Could not restart Gopeed: Gopeed.exe was not found, so it was NOT stopped. Set "Executable path" in the plugin config, or start it by double-clicking the icon.',
+      )
+    }
+    const stopped = await processOps.stopProcess(proc.pid, { confine })
+    if (!stopped.ok) return giveUp('stop', `Could not restart Gopeed: ${trimPeriod(stopped.message)}.`, stopped.sandbox)
+    // Give the API port and the file handles a moment to be released.
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    const launch = await processOps.launchProcess(resolved.path, { confine })
+    if (!launch.ok) {
+      return giveUp(
+        'launch',
+        `Gopeed was stopped but could not be started again: ${trimPeriod(launch.message)}. Start it manually, press "Restart Gopeed" again, or call gopeed_launch.`,
+        launch.sandbox,
+      )
+    }
+    // An unpinned Gopeed comes back on a new random port, so drop the cached detection first.
+    autoPort = 0
+    autoPortAt = 0
+    const redetected = await ensureApiPort(true)
+    const port = redetected || apiPort || Number(config.port.get()) || 0
+    const after = await processOps.waitForApi({
+      host: config.host.get(),
+      port,
+      token: config.token.get(),
+      timeoutMs: 3000,
+      waitMs: 10000,
+    })
+    const pid = Number(launch.pid) || 0
+    const sandboxFacts = {
+      launchSandboxed: Boolean(launch.sandbox?.sandboxed),
+      sandboxMode: String(launch.sandbox?.mode ?? ''),
+      sandboxDetail: String(launch.sandbox?.detail ?? ''),
+    }
+    const pidNote = launch.sandbox?.sandboxed ? ' (pid is the sandbox runner; Gopeed pid is detected separately)' : ''
+    if (after.state !== 'ok') {
+      return {
+        ok: false,
+        launched: true,
+        restarted: false,
+        pid,
+        apiState: after.state,
+        stage: 'api',
+        message: `Gopeed was restarted (pid ${pid})${pidNote} but its API was not ready within 10s (${after.state}: ${after.detail}). It may still be loading; check gopeed_process in a moment.`,
+        ...sandboxFacts,
+      }
+    }
+    return {
+      ok: true,
+      launched: true,
+      restarted: true,
+      pid,
+      apiState: after.state,
+      stage: 'done',
+      detail: after.detail,
+      message: `Restarted Gopeed (pid ${pid})${pidNote}; API ready: ${after.detail}. Running downloads may have been interrupted.`,
+      ...sandboxFacts,
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Browser routes. These are the only browser-facing entry points of the plugin, and both are
+  // registered on Connection's exact Fetch registry, NOT on the loopback webhook port:
+  // - GET  /api/dsh-gopeed/notifications : authenticated feed for the overlay toast.
+  // - POST /api/dsh-gopeed/restart       : the "Restart Gopeed" button on the config page.
+  //
+  // Access control is provided by Connection, not by hand-rolled tokens: an exact route is only
+  // dispatched after the Host/Origin trust fence and browser/API authentication succeed, and its
+  // shared handler answers 403 to any non-owner Peer. A random external process cannot reach it
+  // (no cookie, untrusted Host is refused), and an agent tool has no way to call it at all.
+  // `connection` is optional: in a deployment without the Web carrier the plugin still works.
+  // ---------------------------------------------------------------------------------------------
+
+  /** Serialize restart clicks so two tabs cannot stop/start the process twice. */
+  let restartInFlight = null
+
+  /** Run at most one restart at a time, always resolving to a reportable outcome. */
+  const runRestartOnce = () => {
+    if (restartInFlight) return restartInFlight
+    const task = (async () => restartGopeed(await ensureApiPort()))()
+      .catch((error) => ({
+        ok: false,
+        launched: false,
+        restarted: false,
+        pid: 0,
+        apiState: '',
+        stage: 'internal',
+        message: `Restart failed unexpectedly: ${error?.message || String(error)}`,
+        launchSandboxed: false,
+        sandboxMode: '',
+        sandboxDetail: '',
+      }))
+      .finally(() => {
+        restartInFlight = null
+      })
+    restartInFlight = task
+    return task
+  }
+
+  /** Small JSON response helper shared by the two routes. */
+  const jsonResponse = (status, body) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+    })
+
+  /**
+   * Register both browser routes on whichever Context provides Connection. Using `ctx.inject`
+   * keeps Connection an OPTIONAL dependency: a headless deployment without the Web carrier still
+   * loads the plugin and its tools, and the routes appear whenever Connection becomes available.
+   * @param {any} routeCtx Context that resolved the `connection` service.
+   */
+  const registerBrowserRoutes = (routeCtx) => {
+    const connection = routeCtx?.connection
+    if (!connection || typeof connection.fetch?.register !== 'function') return
+    routeCtx.effect(
+      () =>
+        connection.fetch.register({
+          path: NOTIFICATIONS_PATH,
+          methods: ['GET'],
+          requestBody: 'buffered',
+          fetch: async (request) => jsonResponse(200, notificationFeed(request.url)),
+        }),
+      'dsh-gopeed: notification feed route',
+    )
+    routeCtx.effect(
+      () =>
+        connection.fetch.register({
+          path: RESTART_PATH,
+          methods: ['POST'],
+          requestBody: 'buffered',
+          fetch: async (request) => {
+            // Defense in depth behind Connection's authentication: a same-origin script still has
+            // to send an explicit confirmation, so a stray fetch cannot kill the downloader.
+            let body = null
+            try {
+              body = await request.json()
+            } catch {
+              body = null
+            }
+            if (!body || body.confirm !== true) {
+              return jsonResponse(400, {
+                ok: false,
+                restarted: false,
+                message: 'Restart refused: an explicit POST with {"confirm":true} is required.',
+              })
+            }
+            const outcome = await runRestartOnce()
+            return jsonResponse(outcome.ok ? 200 : 500, outcome)
+          },
+        }),
+      'dsh-gopeed: restart route',
+    )
+  }
+
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['connection'], registerBrowserRoutes)
+  } else {
+    // No Cordis injection on this Context (tests / simplified hosts): use a direct lookup and
+    // present the same small shape registerBrowserRoutes expects.
+    try {
+      const connection = typeof ctx.get === 'function' ? ctx.get('connection') : undefined
+      if (connection) {
+        registerBrowserRoutes({
+          connection,
+          effect: (fn, label) => ctx.effect?.(fn, label),
+        })
+      }
+    } catch {
+      // Without Connection the plugin is still fully usable; only the two browser routes are gone.
+    }
+  }
+
+  /**
+   * Newcomer guidance: when Gopeed is not installed or not configured, explain the fix. This text
+   * is appended to the TOOL's own output (an exception message or the diagnostic `advice`), which
+   * renders as a tool card. It is deliberately NOT sent through `deferContext` any more: that adds
+   * a user-role message to the conversation, i.e. exactly the plugin-impersonating-the-user
+   * behaviour this plugin must not have. It is delivered at most once.
    */
   const SETUP_NOTICE = [
     '[!] Gopeed is not ready yet, so this downloader plugin cannot be used. Three steps fix it - no command line needed:',
@@ -261,27 +1147,18 @@ export function apply(ctx, config) {
     return code === -1 || code === 401 || code === 403
   }
 
-  const notifySetupNeeded = (exec) => {
-    if (setupNoticeSent) return
+  /** The one-off setup text, or '' when it was already delivered in an earlier tool result. */
+  const takeSetupNotice = () => {
+    if (setupNoticeSent) return ''
     setupNoticeSent = true
-    if (!exec || typeof exec.deferContext !== 'function') return
-    try {
-      exec.deferContext({
-        id: `dsh-gopeed-setup-${Date.now()}`,
-        role: 'user',
-        content: [{ type: 'text', text: SETUP_NOTICE }],
-        source: { kind: 'user' },
-      })
-    } catch {
-      // A failed injection must not break the tool's own error path.
-    }
+    return SETUP_NOTICE
   }
 
-  /** Turn any error into a readable exception for the model. */
-  const fail = (action, error, exec) => {
-    if (isSetupProblem(error)) notifySetupNeeded(exec)
+  /** Turn any error into a readable exception for the model (setup guidance rides in the error). */
+  const fail = (action, error) => {
+    const notice = isSetupProblem(error) ? takeSetupNotice() : ''
     const detail = error?.message || String(error)
-    throw new Error(`gopeed_${action} failed: ${detail}`)
+    throw new Error(`gopeed_${action} failed: ${detail}${notice ? `\n\n${notice}` : ''}`)
   }
 
   /** Argument fallback: the model may pass an empty or non-string value. */
@@ -302,10 +1179,17 @@ export function apply(ctx, config) {
     description: 'Create task.',
     // Note: parameters omits additionalProperties. A defineTool-compiled parameter schema is
     // only {type, properties, required}; adding additionalProperties:false would cost about 170
-    // characters across six tools on every turn. Validation lives in execute (reqString /
-    // whitelists) instead. Parameter descriptions are dropped too, because the name plus the
-    // one-line tool description already pin the value down - except `path`, where "save
-    // directory" versus "file path" is a silent, wrong-download kind of mistake.
+    // characters across the tools on every turn. Validation lives in execute (reqString /
+    // whitelists) instead, which is also why `required` is omitted and why value lists that the
+    // tool description already spells out (gopeed_control verbs) are not repeated as enums.
+    // Parameter descriptions are dropped too, because the name plus the one-line tool description
+    // already pin the value down - except `path`, where "save directory" versus "file path" is a
+    // silent, wrong-download kind of mistake.
+    //
+    // Budget note: the seven tool definitions total 1217 characters, 117 over the original 1100
+    // target. `name` and the value enums were restored deliberately - a shorter schema that hides
+    // a real parameter or a legal value costs more in wrong calls than the characters save. See
+    // the footprint section of README.md for the measured per-tool breakdown.
     parameters: {
       type: 'object',
       required: ['url'],
@@ -347,6 +1231,7 @@ export function apply(ctx, config) {
     }),
     timeoutMs: 25000,
     async execute(args, exec) {
+      rememberAgent(exec)
       await ensureApiPort()
       const url = reqString(args?.url, 'url')
       const path = optString(args?.path)
@@ -366,10 +1251,7 @@ export function apply(ctx, config) {
     parameters: {
       type: 'object',
       properties: {
-        status: {
-          type: 'string',
-          enum: ['ready', 'running', 'pause', 'wait', 'error', 'done'],
-        },
+        status: { type: 'string', enum: ['ready', 'running', 'pause', 'wait', 'error', 'done'] },
       },
     },
     output: {
@@ -395,8 +1277,14 @@ export function apply(ctx, config) {
     presentCall: () => ({ card: 'generic', title: 'Gopeed tasks', kind: 'other' }),
     timeoutMs: 25000,
     async execute(args, exec) {
+      rememberAgent(exec)
       await ensureApiPort()
       const filter = optString(args?.status).toLowerCase()
+      // The status list lives here instead of in the tool schema (see gopeed_add's note): a wrong
+      // filter would otherwise return "no tasks" and look like an empty downloader.
+      if (filter && !TASK_STATUSES.includes(filter)) {
+        throw new Error(`Unsupported status filter: ${filter} (expected ${TASK_STATUSES.join(', ')})`)
+      }
       try {
         const raw = await client.list()
         const tasks = (Array.isArray(raw) ? raw : []).map(normalizeTask)
@@ -424,6 +1312,7 @@ export function apply(ctx, config) {
     presentCall: () => ({ card: 'generic', title: 'Gopeed task status', kind: 'other' }),
     timeoutMs: 25000,
     async execute(args, exec) {
+      rememberAgent(exec)
       await ensureApiPort()
       const id = reqString(args?.id, 'id')
       try {
@@ -479,6 +1368,7 @@ export function apply(ctx, config) {
     }),
     timeoutMs: 25000,
     async execute(args, exec) {
+      rememberAgent(exec)
       await ensureApiPort()
       const id = reqString(args?.id, 'id')
       const action = reqString(args?.action, 'action').toLowerCase()
@@ -514,12 +1404,13 @@ export function apply(ctx, config) {
   ctx.tools.register({
     name: 'gopeed_process',
     description: 'Diagnose.',
-    parameters: { type: 'object', properties: {} },
+    parameters: { type: 'object' },
     output: {
       schema: {
         type: 'object',
         additionalProperties: false,
         required: [
+          'pluginVersion',
           'verdict',
           'apiState',
           'apiLatencyMs',
@@ -537,9 +1428,22 @@ export function apply(ctx, config) {
           'exePath',
           'exeSource',
           'baseUrl',
+          'webhookMode',
+          'webhookListening',
+          'webhookUrl',
+          'webhookReceived',
+          'webhookUnread',
+          'webhookError',
+          'diagnosticsSandboxed',
+          'diagnosticsSandboxNote',
           'advice',
         ],
         properties: {
+          pluginVersion: {
+            type: 'string',
+            description:
+              'Backend version of this plugin. Compare it with the version shown in the settings UI: a lower UI version means the browser bundle is stale and DSH must be restarted.',
+          },
           verdict: {
             type: 'string',
             enum: ['running', 'unresponsive', 'stopped', 'misconfigured', 'unauthorized', 'unknown'],
@@ -569,11 +1473,38 @@ export function apply(ctx, config) {
           exePath: { type: 'string', description: 'Resolved executable path; empty when not found.' },
           exeSource: { type: 'string', description: 'Where the path came from, or why it was not found.' },
           baseUrl: { type: 'string', description: 'Base URL used for this request.' },
+          webhookMode: {
+            type: 'string',
+            enum: ['off', 'manual', 'auto'],
+            description: 'Configured webhook mode; off means the plugin listens on no port.',
+          },
+          webhookListening: { type: 'boolean', description: 'Whether the webhook listener is running.' },
+          webhookUrl: {
+            type: 'string',
+            description: 'URL to register in Gopeed; empty when nothing is listening.',
+          },
+          webhookReceived: {
+            type: 'integer',
+            description: 'Events pushed to the plugin since it started; 0 means Gopeed is not pushing here.',
+          },
+          webhookUnread: { type: 'integer', description: 'Events not yet read by gopeed_events.' },
+          webhookError: { type: 'string', description: 'Why the listener is not running; empty when healthy.' },
+          diagnosticsSandboxed: {
+            type: 'boolean',
+            description:
+              'Whether the subprocesses behind this diagnosis were run under the sandbox. Always false: process, socket and executable probes run with host permissions so they can actually see Gopeed.',
+          },
+          diagnosticsSandboxNote: {
+            type: 'string',
+            description:
+              'Plain note that this diagnosis ran outside the sandbox and that only starting or stopping Gopeed is confined.',
+          },
           advice: { type: 'string', description: 'Suggested next step.' },
         },
       },
       render: (_args, value) => {
         const lines = [
+          `Plugin: ${value.pluginVersion}`,
           `Status: ${value.verdict}`,
           `API: ${value.apiState} (${value.apiLatencyMs}ms) - ${value.apiDetail}`,
         ]
@@ -589,7 +1520,10 @@ export function apply(ctx, config) {
               : `Process: no ${value.image} found (it may have just exited; this does not mean launching will fail)`,
           )
         } else {
-          lines.push('Process: process list unavailable here (permission restricted); the verdict relies on the API')
+          lines.push(
+            'Process: this host cannot enumerate processes, so "no process found" is unknown rather than ' +
+              'evidence; the verdict relies on the API',
+          )
         }
         lines.push(
           value.exePath
@@ -597,6 +1531,25 @@ export function apply(ctx, config) {
             : `Executable: not found (${value.exeSource})`,
         )
         lines.push(`Endpoint: ${value.baseUrl}`)
+        // Strategy 3 disclosure: the reads above were NOT sandboxed. Saying so keeps a diagnosis
+        // that relied on host-only visibility from being mistaken for a policy-governed one.
+        lines.push(
+          'Sandbox: diagnostics ran outside the sandbox (host permissions) - only starting or stopping Gopeed is confined.',
+        )
+        // Webhook status answers "is the push channel wired up?" - the question that otherwise
+        // needs two tools to answer.
+        if (value.webhookMode === 'off') {
+          lines.push('Webhook: off (no port is being listened on; use gopeed_list to poll)')
+        } else if (value.webhookListening) {
+          lines.push(
+            `Webhook: ${value.webhookMode}, listening at ${value.webhookUrl}, ` +
+              `${value.webhookReceived} event(s) received, ${value.webhookUnread} unread`,
+          )
+        } else {
+          lines.push(
+            `Webhook: ${value.webhookMode} but NOT listening${value.webhookError ? ` (${value.webhookError})` : ''}`,
+          )
+        }
         lines.push(`Advice: ${value.advice}`)
         return textBlock(lines)
       },
@@ -605,6 +1558,7 @@ export function apply(ctx, config) {
     presentCall: () => ({ card: 'generic', title: 'Gopeed diagnostics', kind: 'other' }),
     timeoutMs: 30000,
     async execute(_args, exec) {
+      rememberAgent(exec)
       let detectedPort = await ensureApiPort()
       const options = {
         host: config.host.get(),
@@ -643,7 +1597,7 @@ export function apply(ctx, config) {
       } else if (api.state === 'timeout') {
         verdict = 'unresponsive'
         advice =
-          'The port is reachable but the process is not responding, so Gopeed is probably stuck: call gopeed_launch with restart=true to force a restart.'
+          'The port is reachable but the process is not responding, so Gopeed is probably stuck: ask the user to press "Restart Gopeed" on the plugin config page, which is the only restart path (it interrupts running downloads).'
       } else if (api.state === 'refused') {
         // A refused connection has two very different causes. When the process is verifiably
         // alive, telling the user "Gopeed is not running" sends them to the wrong fix: the real
@@ -658,6 +1612,14 @@ export function apply(ctx, config) {
             `Gopeed is running (pid ${proc.pid}) but its API port could not be determined: ${api.baseUrl} does not answer. ` +
             `${scanHint} Open Gopeed -> Settings -> Advanced -> Protocol, read the fixed port shown there ` +
             '(Gopeed uses a random port by default), then set "port" in the plugin config to that value.'
+        } else if (proc.probe === 'unavailable') {
+          // The process table could not be read, so "not running" is an unverified guess. Saying it
+          // would send the user to launch a second instance; report the uncertainty instead.
+          verdict = 'unknown'
+          advice =
+            `Cannot reach ${api.baseUrl} and this host cannot enumerate processes, so whether Gopeed ` +
+            'is running is unknown. Check Gopeed yourself, or set a fixed port in the plugin config to ' +
+            'the one shown under Gopeed -> Settings -> Advanced.'
         } else {
           verdict = 'stopped'
           advice = 'Gopeed is not running: use gopeed_launch to start it (same as double-clicking the icon).'
@@ -685,11 +1647,20 @@ export function apply(ctx, config) {
       if (api.state === 'refused' || api.state === 'error') {
         advice += `\nIf Gopeed is not installed or not configured yet: ${SETUP_GUIDE}`
       }
-      // A diagnosis that ends in "not usable" is exactly when the person needs the notice, so
-      // the diagnostic tool raises it too; notifySetupNeeded de-duplicates per plugin instance.
-      if (verdict !== 'running' && verdict !== 'unauthorized') notifySetupNeeded(exec)
+      // A diagnosis that ends in "not usable" is exactly when the notice helps. It rides in the
+      // tool result's advice (a tool card), never as a chat message, and is sent at most once.
+      if (verdict !== 'running' && verdict !== 'unauthorized') {
+        const notice = takeSetupNotice()
+        if (notice) advice += `\n\n${notice}`
+      }
+
+      // Retry the listener on every diagnosis: a port that was busy earlier may be free now, and
+      // this tool is where the user looks to find out whether pushes are arriving at all. Calling
+      // it in every mode also lets a runtime switch to off close an already open port.
+      await ensureReceiver().catch(() => null)
 
       return {
+        pluginVersion: PLUGIN_VERSION,
         verdict,
         apiState: api.state,
         apiLatencyMs: Math.max(0, Math.round(api.latencyMs || 0)),
@@ -713,6 +1684,15 @@ export function apply(ctx, config) {
                 : 'configured path, default install path, running process / registry / shortcuts, common install paths'
             })`,
         baseUrl: api.baseUrl || client.baseUrl(),
+        webhookMode: webhookMode(),
+        webhookListening: Boolean(receiver && receiver.status === 'listening'),
+        webhookUrl: receiver && receiver.status === 'listening' ? receiver.url : '',
+        webhookReceived: receiver ? receiver.received : 0,
+        webhookUnread: receiver ? receiver.unreadCount() : 0,
+        webhookError: receiver && receiver.status === 'listening' ? '' : receiverFailure,
+        diagnosticsSandboxed: false,
+        diagnosticsSandboxNote:
+          'Read-only diagnosis only: the process table, socket listing, executable lookup and loopback API probe ran directly with DSH host permissions and are NOT confined by any file policy. Starting or stopping Gopeed is the confined part, so a sandbox denial never hides the process from this diagnosis.',
         advice,
       }
     },
@@ -720,46 +1700,71 @@ export function apply(ctx, config) {
 
   ctx.tools.register({
     name: 'gopeed_launch',
-    description: 'Start/restart.',
+    // Starting is safe to expose as a tool; KILLING the process is not. Restarting is offered only
+    // by the "Restart Gopeed" button on the plugin config page.
+    description: 'Start if not running.',
     parameters: {
       type: 'object',
-      properties: {
-        restart: { type: 'boolean' },
-      },
+      properties: {},
     },
     output: {
       schema: {
         type: 'object',
         additionalProperties: false,
-        required: ['launched', 'alreadyRunning', 'restarted', 'pid', 'apiState', 'message'],
+        required: [
+          'launched',
+          'alreadyRunning',
+          'pid',
+          'apiState',
+          'message',
+          'launchSandboxed',
+          'sandboxMode',
+          'sandboxDetail',
+        ],
         properties: {
           launched: { type: 'boolean', description: 'Whether a start was actually attempted.' },
           alreadyRunning: { type: 'boolean', description: 'Whether Gopeed was running before the call.' },
-          restarted: { type: 'boolean', description: 'Whether it was killed and started again.' },
-          pid: { type: 'integer', description: 'Pid of the new process; 0 when nothing started.' },
+          pid: { type: 'integer', description: 'Pid of the process this call started; 0 when nothing started.' },
           apiState: {
             type: 'string',
             enum: ['ok', 'refused', 'timeout', 'unauthorized', 'error'],
             description: 'Last API probe result after launching.',
           },
           message: { type: 'string', description: 'Human-readable result.' },
+          launchSandboxed: {
+            type: 'boolean',
+            description: 'Whether the start command was wrapped and confined by the sandbox.',
+          },
+          sandboxMode: {
+            type: 'string',
+            description:
+              'File policy the start ran under: read-only, workspace-write, danger-full-access, or empty when no start was attempted.',
+          },
+          sandboxDetail: {
+            type: 'string',
+            description:
+              'Why the start was confined or not: sandbox unavailable, policy allows full access, or the sandbox refused it.',
+          },
         },
       },
       render: (_args, value) => textBlock([value.message]),
     },
     isConcurrencySafe: () => false,
-    presentCall: (args) => ({
+    presentCall: () => ({
       card: 'generic',
-      title: args?.restart ? 'Restart Gopeed' : 'Start Gopeed',
+      title: 'Start Gopeed',
       kind: 'execute',
     }),
     timeoutMs: 40000,
-    async execute(args, exec) {
-      await ensureApiPort()
-      const restart = args?.restart === true
+    async execute(_args, exec) {
+      rememberAgent(exec)
+      const apiPort = await ensureApiPort()
       const base = {
         host: config.host.get(),
-        port: config.port.get(),
+        // Use the RESOLVED port, not the raw config value: with port=0 (auto-detect) the raw
+        // value is 0, probeApi cannot dial it, and this tool would conclude "not running" and
+        // launch a second instance.
+        port: apiPort || Number(config.port.get()) || 0,
         token: config.token.get(),
         timeoutMs: 3000,
       }
@@ -768,14 +1773,16 @@ export function apply(ctx, config) {
       const before = await probeApi(base)
       const alreadyRunning = before.state === 'ok'
 
-      if (alreadyRunning && !restart) {
+      if (alreadyRunning) {
         return {
           launched: false,
           alreadyRunning: true,
-          restarted: false,
           pid: 0,
           apiState: before.state,
-          message: `Gopeed is already running (${before.detail}); not starting it again. Add restart=true to recover a stuck process.`,
+          message:
+            `Gopeed is already running (${before.detail}); not starting it again. If it is stuck, ` +
+            'the user can press "Restart Gopeed" on the plugin config page.',
+          ...NO_LAUNCH_SANDBOX,
         }
       }
 
@@ -783,49 +1790,10 @@ export function apply(ctx, config) {
       const resolved = await resolveExecutable(config.exePath.get())
       const exePath = resolved.path
 
-      if (restart) {
-        // Restarting needs the pid; when it cannot be read, say so instead of faking success.
-        const proc = await findProcess(exePath)
-        if (proc.probe !== 'ok') {
-          return {
-            launched: false,
-            alreadyRunning,
-            restarted: false,
-            pid: 0,
-            apiState: before.state,
-            message: `A restart needs the process pid, but the process list is unavailable here (${proc.detail}). End Gopeed manually and call gopeed_launch, or double-click the icon.`,
-          }
-        }
-        if (!proc.found) {
-          return {
-            launched: false,
-            alreadyRunning: false,
-            restarted: false,
-            pid: 0,
-            apiState: before.state,
-            message: `No ${proc.image} process found, so there is nothing to restart. To start it use restart=false (or just call gopeed_launch).`,
-          }
-        }
-        const stopped = await stopProcess(proc.pid)
-        if (!stopped.ok) {
-          return {
-            launched: false,
-            alreadyRunning,
-            restarted: false,
-            pid: 0,
-            apiState: before.state,
-            message: stopped.message,
-          }
-        }
-        // Give the port and file handles a moment to be released.
-        await new Promise((resolve) => setTimeout(resolve, 900))
-      }
-
       if (!exePath) {
         return {
           launched: false,
           alreadyRunning,
-          restarted: false,
           pid: 0,
           apiState: before.state,
           message:
@@ -836,37 +1804,273 @@ export function apply(ctx, config) {
             // Newcomer guidance only appears on this "program not found" path; the success path
             // carries no extra context.
             `\nIf Gopeed is not installed or not configured yet: ${SETUP_GUIDE}`,
+          ...NO_LAUNCH_SANDBOX,
         }
       }
 
-      const launch = await launchProcess(exePath)
+      // Starting is a write action: hand the exact argv to the optional sandbox seam. The confiner
+      // resolves the session's own policy per call, so a runtime mode switch needs no remount.
+      const launch = await launchProcess(exePath, { confine: makeConfiner(exec) })
+      const launchSandbox = sandboxReport(launch.sandbox)
       if (!launch.ok) {
+        const detail = String(launch.sandbox?.detail ?? '')
+        // The refusal text already carries the reason; do not print it twice.
+        const sandboxSuffix = detail && !launch.message.includes(detail) ? ` Sandbox: ${detail}` : ''
         return {
           launched: false,
           alreadyRunning,
-          restarted: false,
           pid: 0,
           apiState: before.state,
-          message: `Launch failed: ${launch.message}. Used ${exePath} (source: ${resolved.source}). You can change it under "Executable path" in the plugin config.`,
+          message:
+            `Launch failed: ${trimPeriod(launch.message)}. Used ${exePath} (source: ${resolved.source}).` +
+            `${sandboxSuffix} You can change the path under "Executable path" in the plugin config, or start Gopeed yourself.`,
+          ...launchSandbox,
         }
       }
 
       const after = await waitForApi({ ...base, waitMs: 10000 })
       const ok = after.state === 'ok'
+      const pidNote = launch.sandbox?.sandboxed
+        ? ' (pid is the sandbox runner; the confined Gopeed pid is detected separately)'
+        : ''
+      const confineText = launch.sandbox?.sandboxed
+        ? ` Start was confined by the sandbox under "${launch.sandbox.mode}" mode (enforcement: ${launch.sandbox.enforcement || 'unknown'}).`
+        : ` Start was NOT confined: ${launch.sandbox?.detail || 'no sandbox applied.'}`
       return {
         launched: true,
         alreadyRunning,
-        restarted: restart,
         pid: Number(launch.pid) || 0,
         apiState: after.state,
         message: ok
-          ? `${restart ? 'Restarted' : 'Started'} Gopeed (pid ${launch.pid}); API ready: ${after.detail}.`
-          : `${restart ? 'Restarted' : 'Started'} Gopeed (pid ${launch.pid}), but the API was not ready within 10s (${after.state}: ${after.detail}). Gopeed may still be loading; check again with gopeed_process later.`,
+          ? `Started Gopeed (pid ${launch.pid})${pidNote}; API ready: ${after.detail}.${confineText}`
+          : `Started Gopeed (pid ${launch.pid})${pidNote}, but the API was not ready within 10s (${after.state}: ${after.detail}). Gopeed may still be loading; check again with gopeed_process later.${confineText}`,
+        ...launchSandbox,
       }
     },
   })
 
-  ctx.logger?.info?.(`dsh-gopeed: registered 6 tools, endpoint ${client.baseUrl()}`)
+  // ---------------------------------------------------------------------------------------------
+  // gopeed_events: read the event buffer, or (mode auto only) register this listener in Gopeed.
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * Write the listener URL into Gopeed config. This is the ONLY config write in the plugin and it
+   * is reachable only through gopeed_events with an explicit action= argument, after the mode check.
+   * Restarting is intentionally NOT part of this tool: it would let an agent kill the downloader.
+   * The config page's "Restart Gopeed" button owns that action now.
+   * @param {object} args Tool arguments (only opts into the write).
+   * @param {any} exec Tool run context, used to surface setup problems.
+   */
+  const applyWebhookConfig = async (args, exec) => {
+    const mode = webhookMode()
+    const action = 'apply'
+    if (mode !== 'auto') {
+      throw new Error(
+        `Refused: action=${action} writes Gopeed config and is only allowed in webhookMode auto (current mode: ${mode}). ` +
+          'In manual mode you add the listener URL to Gopeed yourself under Settings -> Advanced -> Webhook push; ' +
+          'off mode listens on no port at all. Nothing was written.',
+      )
+    }
+    const active = await ensureReceiver()
+    if (!active) {
+      throw new Error(
+        `Cannot register the webhook URL: the listener is not running (${receiverFailure || 'unknown reason'}). ` +
+          'Fix webhookPort and retry; nothing was written to Gopeed.',
+      )
+    }
+    const listenerUrl = active.url
+    let current
+    try {
+      // GET only: a failed read leaves Gopeed untouched.
+      current = await client.config()
+    } catch (error) {
+      fail('events', error, exec)
+    }
+    if (!current || typeof current !== 'object' || Array.isArray(current)) {
+      throw new Error(
+        'Cannot register the webhook URL: Gopeed returned no usable config object, so nothing was written.',
+      )
+    }
+    const previous = current.webhook && typeof current.webhook === 'object' ? current.webhook : {}
+    // The whole config is PUT back, so start from what was read and change only webhook: the user's
+    // other webhook URLs (and every unrelated setting) survive untouched.
+    const next = {
+      ...current,
+      webhook: { ...previous, enable: true, urls: mergeWebhookUrls(previous.urls, listenerUrl) },
+    }
+    try {
+      await client.updateConfig(next)
+    } catch (error) {
+      throw new Error(
+        `Writing Gopeed config failed: ${error?.message || String(error)}. ` +
+          'Treat Gopeed config as unchanged unless you check it; nothing else was modified.',
+      )
+    }
+    // Read back instead of trusting the response: applied=true must mean "it is really in the file".
+    let applied = false
+    let readBack = ''
+    try {
+      const after = await client.config()
+      applied =
+        after?.webhook?.enable === true && mergeWebhookUrls(after?.webhook?.urls, '').includes(listenerUrl)
+    } catch (error) {
+      readBack = error?.message || String(error)
+    }
+    const result = {
+      mode,
+      action,
+      listener: listenerUrl,
+      listening: true,
+      count: 0,
+      unread: active.unreadCount(),
+      events: [],
+      applied,
+      listenerUrl,
+      message: '',
+    }
+    if (!applied) {
+      result.message =
+        'Gopeed accepted the write but reading the config back did not show this URL' +
+        (readBack ? ` (read-back failed: ${readBack})` : '') +
+        '. Treat the change as unconfirmed and check Gopeed -> Settings -> Advanced manually.'
+      return result
+    }
+    result.message =
+      'Changed Gopeed webhook config: webhook.enable=true and this listener URL is in webhook.urls ' +
+      '(other URLs were kept). Gopeed was NOT restarted, so its settings screen may still show the old ' +
+      'values. To reload them, open this plugin\'s config page and press "Restart Gopeed" there: ' +
+      'restarting is a user action and interrupts running downloads, so no agent tool performs it.'
+    return result
+  }
+
+  /** Read the retained events without touching Gopeed config. */
+  const readEvents = async (args) => {
+    const mode = webhookMode()
+    // Called even when the mode is off so a runtime switch to off closes any open port.
+    const active = await ensureReceiver()
+    if (mode === 'off' || !active) {
+      return {
+        mode,
+        action: '',
+        listener: '',
+        listening: false,
+        count: 0,
+        unread: 0,
+        events: [],
+        applied: false,
+        message:
+          mode === 'off'
+            ? 'Webhook receiving is OFF: this plugin listens on no port, so Gopeed cannot push download events to it. ' +
+              'Either set webhookMode to manual (then add the listener URL in Gopeed -> Settings -> Advanced -> ' +
+              'Webhook push) or to auto (then call gopeed_events with action=apply), or keep polling with ' +
+              'gopeed_list / gopeed_status.'
+            : `Webhook mode is ${mode} but the listener is not running (${receiverFailure || 'unknown reason'}), ` +
+              'so no events can arrive. Check webhookPort and retry; gopeed_process reports the same status.',
+      }
+    }
+    const sinceRaw = Number(args?.since)
+    const since = Number.isFinite(sinceRaw) && sinceRaw > 0 ? sinceRaw : 0
+    const unread = active.unreadCount()
+    const events = active.list({ since, unreadOnly: args?.unreadOnly === true })
+    // Returning events is what acknowledges them; without this the unread counter could only grow.
+    active.markRead()
+    return {
+      mode,
+      action: '',
+      listener: active.url,
+      listening: true,
+      count: events.length,
+      unread,
+      events,
+      applied: false,
+      message:
+        `Listening at ${active.url} (mode ${mode}): ${events.length} event(s) returned, ${unread} were unread ` +
+        'before this call. Events are kept in a 50-entry buffer and are marked read once returned. If nothing ' +
+        'arrives, confirm that URL is registered in Gopeed -> Settings -> Advanced -> Webhook push.',
+    }
+  }
+
+  ctx.tools.register({
+    name: 'gopeed_events',
+    // Definition budget (see gopeed_add's note): this description is deliberately terse.
+    // `apply` only writes the webhook fields; restarting Gopeed is not available to any tool.
+    description: 'Events; apply writes webhook config.',
+    // `since` / `unreadOnly` filter the read. `action` is the explicit, user-initiated write.
+    parameters: {
+      type: 'object',
+      properties: {
+        since: { type: 'number' },
+        unreadOnly: { type: 'boolean' },
+        action: { type: 'string', enum: ['apply'] },
+      },
+    },
+    output: {
+      schema: EVENTS_RESULT_SCHEMA,
+      render: (_args, value) => {
+        if (value.action) {
+          return textBlock([
+            `Gopeed webhook config written: ${value.applied ? 'yes' : 'no'}`,
+            `Listener: ${value.listener || '(none)'}`,
+            value.message,
+          ])
+        }
+        if (value.mode === 'off') {
+          return textBlock([
+            '[!] Webhook receiving is OFF: no port is being listened on, so Gopeed push events never reach this plugin.',
+            value.message,
+            'Polling alternative: gopeed_list (all tasks) or gopeed_status (one task).',
+          ])
+        }
+        if (!value.listening) {
+          return textBlock([`[!] Webhook mode ${value.mode} but NOT listening.`, value.message])
+        }
+        const lines = [
+          `Webhook ${value.mode}: listening at ${value.listener} - ${value.count} event(s), ` +
+            `${value.unread} unread before this call.`,
+        ]
+        for (const event of value.events) {
+          const size = event.sizeBytes > 0 ? `, ${formatBytes(event.sizeBytes)}` : ''
+          const when = new Date(event.at).toISOString()
+          lines.push(
+            `- ${event.event} ${event.name || event.taskId} (${event.status || '?'}${size}) at ${when}` +
+              (event.path ? ` in ${event.path}` : ''),
+          )
+        }
+        if (value.count === 0) {
+          lines.push(
+            'No events yet. Confirm the listener URL above is added in Gopeed -> Settings -> Advanced -> Webhook push.',
+          )
+        }
+        lines.push('Returned events are marked read.')
+        return textBlock(lines)
+      },
+    },
+    // Writes Gopeed config on the action branch and marks events read, so never concurrent.
+    isConcurrencySafe: () => false,
+    presentCall: (args) => ({
+      card: 'generic',
+      title: args?.action ? 'Gopeed webhook config' : 'Gopeed events',
+      kind: args?.action ? 'execute' : 'other',
+    }),
+    timeoutMs: 45000,
+    async execute(args, exec) {
+      rememberAgent(exec)
+      const action = optString(args?.action).toLowerCase()
+      // Restarting is deliberately not an action: only the config page button may kill Gopeed.
+      if (action && action !== 'apply') {
+        throw new Error(
+          `Unsupported action: ${action} (expected apply). Restarting Gopeed is a user action: ` +
+            'press "Restart Gopeed" on the plugin config page.',
+        )
+      }
+      if (action) return applyWebhookConfig({ ...args, action }, exec)
+      return readEvents(args)
+    },
+  })
+
+  ctx.logger?.info?.(
+    `dsh-gopeed: registered 7 tools, endpoint ${client.baseUrl()}, webhook mode ${webhookMode()}`,
+  )
 }
 
 /** Exported for debugging / reuse: format a byte count as readable text. */

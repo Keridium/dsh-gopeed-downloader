@@ -28,6 +28,25 @@ window.__ModuleLoader__.load({
     const SLOT = 'plugins.row.config'
     /** Key rule: `<package name>#<row id declared in cordis.patch.yml>`. */
     const KEY = 'dsh-gopeed#gopeed'
+    /**
+     * Global overlay slot: every app-wide transient notice (toasts, dialogs) mounts here.
+     * This is how a download-complete notice reaches the user WITHOUT writing into the chat.
+     */
+    const OVERLAY_SLOT = 'shell.overlay'
+    /**
+     * Host routes owned by this plugin, registered in index.js on Connection's authenticated
+     * exact Fetch registry. They are document-relative on purpose (the other UI plugins do the
+     * same): the app may be mounted below a directory, and the HttpOnly session cookie is sent
+     * automatically, so no token ever has to travel through the config form.
+     */
+    const NOTIFY_ROUTE = 'api/dsh-gopeed/notifications'
+    const RESTART_ROUTE = 'api/dsh-gopeed/restart'
+    /** How often the page asks the Host for download notices while it is visible. */
+    const NOTIFY_POLL_MS = 5000
+    /** How long one overlay notice stays on screen before it dismisses itself. */
+    const NOTIFY_HOLD_MS = 6000
+    /** Maximum notices stacked at once; older ones scroll out. */
+    const NOTIFY_MAX_VISIBLE = 4
 
     const zh = {
       summary: 'Gopeed 下载器：新建 / 列表 / 查进度 / 暂停 / 继续 / 删除，地址与 Token 可在这里配置。',
@@ -55,6 +74,40 @@ window.__ModuleLoader__.load({
       loading: '正在读取配置…',
       unavailable: '配置表单当前不可用（Host 没有暴露这个插件的设置）。',
       verify: '保存后可以让 agent 调用 gopeed_process 确认连通性。',
+      webhook: 'Webhook 推送（下载完成通知）',
+      webhookHint: '下载完成后由 Gopeed 推送到插件；插件只在本地监听端口，不会主动发起网络请求。',
+      webhookModeOff: 'off — 默认，不启用',
+      webhookModeOffHint: '不监听任何端口；下载完成后需要你自己调用 gopeed_list 查询状态。',
+      webhookModeManual: 'manual — 手动配置',
+      webhookModeManualHint: '插件在本地监听端口；把下方状态区显示的完整地址添加到 Gopeed 的「设置 → 开发者 → Webhook 推送」，并确认「启用 Webhook」开关已打开。',
+      webhookModeAuto: 'auto — 自动配置',
+      webhookModeAutoHint: '插件会自动把监听地址写进 Gopeed 的配置；写入后要重启 Gopeed 才会生效。',
+      webhookPort: 'Webhook 监听端口',
+      webhookPortHint: '填一个 0–65535 的整数：0 = 由系统自动分配空闲端口（每次可能不同），填具体数字则固定使用它。',
+      webhookPortRandom: '随机生成',
+      webhookPortInvalid: 'Webhook 端口必须是 0–65535 之间的整数（0 = 自动分配）。',
+      webhookStatus: 'Webhook 状态',
+      webhookStatusMode: '当前模式',
+      webhookUrl: 'Webhook 地址',
+      webhookCopy: '复制',
+      webhookCopied: '已复制',
+      webhookUrlUnfixed: '端口填 0 时由系统随机分配，保存后请用 gopeed_events 查看实际地址；想让地址固定下来，就在上面填一个具体端口。',
+      webhookManualStep: '把上面的地址添加到 Gopeed → 设置 → 开发者 → Webhook 推送，然后确认这一页的「启用 Webhook」开关已经打开（只加地址不打开开关，推送不会发出来）。',
+      webhookNeedPeer: '只有 Gopeed 那边也添加了同一个 URL，推送才会真的到达插件。',
+      webhookOffWarning: '未启用：下载完成后收不到推送，只能主动查询（gopeed_list）。',
+      webhookAutoNote: '插件会自动写入，无需手动填地址。',
+      webhookRestartWarning: 'auto 写入后需要重启 Gopeed 才会生效（GUI 里可能仍显示旧配置）。重启会中断正在进行的下载。',
+      restart: '重启 Gopeed',
+      restartHint: '会中断正在进行的下载',
+      restartConfirm: '重启 Gopeed 会中断正在进行的下载，确定继续吗？',
+      restarting: '重启中…',
+      restartOk: '重启成功，Gopeed API 已就绪。',
+      restartFail: '重启失败：',
+      restartUnavailable: '页面无法调用重启接口（Connection 通道不可用）。',
+      notifyDone: '下载完成',
+      notifyFailed: '下载失败',
+      notifyDismiss: '关闭通知',
+      versionHint: '若界面版本低于 gopeed_process 返回的 pluginVersion，说明浏览器仍在用旧界面，请重启 DSH。',
     }
 
     const en = {
@@ -83,6 +136,40 @@ window.__ModuleLoader__.load({
       loading: 'Reading configuration...',
       unavailable: 'The configuration form is unavailable: the host exposes no settings for this plugin.',
       verify: 'After saving, ask the agent to call gopeed_process to verify connectivity.',
+      webhook: 'Webhook push (download finished notifications)',
+      webhookHint: 'Gopeed pushes status to the plugin when a download finishes; the plugin only listens on a local port and never starts a network request.',
+      webhookModeOff: 'off - disabled (default)',
+      webhookModeOffHint: 'Listen on no port; after a download finishes you have to ask gopeed_list yourself.',
+      webhookModeManual: 'manual - configure by hand',
+      webhookModeManualHint: 'The plugin listens on a local port; add the full address shown in the status block below in Gopeed -> Settings -> Developer -> Webhook push, and confirm the "Enable webhook" switch on that page is ON.',
+      webhookModeAuto: 'auto - configure automatically',
+      webhookModeAutoHint: 'The plugin writes the listen address into the Gopeed configuration automatically; Gopeed must be restarted before it takes effect.',
+      webhookPort: 'Webhook listen port',
+      webhookPortHint: 'An integer from 0 to 65535: 0 lets the system pick a free port (it may differ each time), any number is pinned as-is.',
+      webhookPortRandom: 'Random port',
+      webhookPortInvalid: 'Webhook port must be an integer between 0 and 65535 (0 = auto-assign).',
+      webhookStatus: 'Webhook status',
+      webhookStatusMode: 'Current mode',
+      webhookUrl: 'Webhook URL',
+      webhookCopy: 'Copy',
+      webhookCopied: 'Copied',
+      webhookUrlUnfixed: 'Port 0 is assigned randomly by the system, so check the actual address with gopeed_events after saving; enter a concrete port above to pin it.',
+      webhookManualStep: 'Add the address above in Gopeed -> Settings -> Developer -> Webhook push, then confirm the "Enable webhook" switch on that page is ON (an address alone sends nothing).',
+      webhookNeedPeer: 'Pushes only arrive when the same URL is also added on the Gopeed side.',
+      webhookOffWarning: 'Not enabled: the plugin receives no push after a download finishes, so you can only poll it yourself (gopeed_list).',
+      webhookAutoNote: 'The plugin writes the address automatically; no manual entry needed.',
+      webhookRestartWarning: 'The auto write takes effect only after restarting Gopeed (the GUI may still show the old configuration). Restarting interrupts downloads in progress.',
+      restart: 'Restart Gopeed',
+      restartHint: 'Interrupts downloads in progress',
+      restartConfirm: 'Restarting Gopeed interrupts downloads in progress. Continue?',
+      restarting: 'Restarting...',
+      restartOk: 'Restarted. The Gopeed API is ready.',
+      restartFail: 'Restart failed: ',
+      restartUnavailable: 'This page cannot reach the restart route (Connection channel unavailable).',
+      notifyDone: 'Download finished',
+      notifyFailed: 'Download failed',
+      notifyDismiss: 'Dismiss notification',
+      versionHint: 'If this UI version is lower than the pluginVersion returned by gopeed_process, the browser is still running the old UI; restart DSH.',
     }
 
     const styles = {
@@ -115,17 +202,139 @@ window.__ModuleLoader__.load({
         cursor: 'pointer',
       },
       note: { fontSize: '12px', lineHeight: 1.5, margin: 0 },
+      // Selectable monospace line for the generated webhook URL, so the text
+      // can still be copied by hand when the clipboard API is unavailable.
+      url: {
+        fontSize: '12px',
+        lineHeight: 1.5,
+        margin: 0,
+        padding: '5px 8px',
+        borderRadius: '6px',
+        border: '1px solid rgba(127,127,127,0.32)',
+        background: 'rgba(127,127,127,0.08)',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+        wordBreak: 'break-all',
+        userSelect: 'all',
+        WebkitUserSelect: 'all',
+      },
       okNote: { fontSize: '12px', lineHeight: 1.5, margin: 0, color: '#1a7f4b' },
       errNote: { fontSize: '12px', lineHeight: 1.5, margin: 0, color: '#c0392b' },
+      warnNote: { fontSize: '12px', lineHeight: 1.5, margin: 0, color: '#b26a00', fontWeight: 600 },
+      // Destructive action: red outline and text, used only by "Restart Gopeed".
+      danger: {
+        padding: '6px 16px',
+        borderRadius: '8px',
+        border: '1px solid rgba(192,57,43,0.62)',
+        background: 'rgba(192,57,43,0.12)',
+        color: '#c0392b',
+        font: 'inherit',
+        fontWeight: 600,
+        cursor: 'pointer',
+      },
+      dangerBusy: { opacity: 0.55, cursor: 'default' },
+      // Overlay stack for download notices; bottom-right, above page content, never in the chat.
+      toasts: {
+        position: 'fixed',
+        right: '18px',
+        bottom: '18px',
+        zIndex: 2147483000,
+        display: 'grid',
+        gap: '8px',
+        width: 'min(340px, calc(100vw - 36px))',
+      },
+      toast: {
+        position: 'relative',
+        display: 'grid',
+        gap: '3px',
+        padding: '10px 34px 10px 12px',
+        borderRadius: '10px',
+        border: '1px solid rgba(127,127,127,0.4)',
+        background: 'rgba(32,32,32,0.94)',
+        color: '#f2f2f2',
+        fontSize: '12.5px',
+        lineHeight: 1.5,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+      },
+      toastTitle: { fontWeight: 600, fontSize: '12.5px' },
+      toastText: { wordBreak: 'break-word' },
+      toastPath: { opacity: 0.68, fontSize: '11.5px', wordBreak: 'break-all' },
+      toastClose: {
+        position: 'absolute',
+        top: '4px',
+        right: '4px',
+        width: '24px',
+        height: '24px',
+        border: 'none',
+        borderRadius: '6px',
+        background: 'transparent',
+        color: 'inherit',
+        opacity: 0.7,
+        cursor: 'pointer',
+        font: 'inherit',
+      },
       muted: { opacity: 0.62, fontSize: '12.5px', lineHeight: 1.6, margin: 0 },
+      option: {
+        display: 'grid',
+        gap: '3px',
+        padding: '7px 9px',
+        borderRadius: '8px',
+        border: '1px solid rgba(127,127,127,0.22)',
+        background: 'rgba(127,127,127,0.04)',
+      },
+      optionHead: { display: 'flex', alignItems: 'center', gap: '8px' },
+      optionLabel: { fontWeight: 600, fontSize: '12.5px' },
+      version: {
+        fontSize: '11.5px',
+        fontWeight: 600,
+        letterSpacing: '0.02em',
+        padding: '1px 6px',
+        borderRadius: '999px',
+        border: '1px solid rgba(127,127,127,0.42)',
+        background: 'rgba(127,127,127,0.10)',
+        whiteSpace: 'nowrap',
+      },
+      panel: {
+        display: 'grid',
+        gap: '6px',
+        padding: '10px 12px',
+        borderRadius: '8px',
+        border: '1px dashed rgba(127,127,127,0.42)',
+        background: 'rgba(127,127,127,0.05)',
+      },
     }
 
+    /** Radio order and the dictionary keys describing each webhook mode. */
+    const WEBHOOK_MODES = ['off', 'manual', 'auto']
+    const WEBHOOK_MODE_LABEL = {
+      off: 'webhookModeOff',
+      manual: 'webhookModeManual',
+      auto: 'webhookModeAuto',
+    }
+    const WEBHOOK_MODE_HINT = {
+      off: 'webhookModeOffHint',
+      manual: 'webhookModeManualHint',
+      auto: 'webhookModeAutoHint',
+    }
+
+    /** The plugin always receives pushes on this path; the port is the free variable. */
+    const WEBHOOK_PATH = '/webhook'
+    /** The plugin listens on loopback only, so the URL is always built from this host. */
+    const WEBHOOK_LOCAL_HOST = '127.0.0.1'
+
     /**
-     * Class applied only to the port input. Pseudo-elements such as
+     * Ports already produced by the "random" button, kept at module scope so
+     * the sequence does not restart when Fields remounts after a save. It only
+     * guarantees distinct values within one page session; nothing is persisted.
+     */
+    const pickedWebhookPorts = new Set()
+
+    /**
+     * Class applied to the numeric inputs. Pseudo-elements such as
      * ::-webkit-inner-spin-button cannot be targeted from an inline style
-     * object, so the rule is injected as a stylesheet instead. The input
-     * keeps type="number" (numeric keypad and browser validation still
-     * work); only the native spinner is hidden.
+     * object, so the rule is injected as a stylesheet instead. Both numeric
+     * inputs are type="text" with inputMode="numeric" (see the comment on the
+     * API port input), and this class is a safety net for builds that paint a
+     * spinner anyway.
      */
     const PORT_CLASS = 'dsh-gopeed-num'
     const PORT_CSS =
@@ -133,9 +342,64 @@ window.__ModuleLoader__.load({
       '.dsh-gopeed-num::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}' +
       '.dsh-gopeed-num{-moz-appearance:textfield;}'
 
+    /**
+     * Version of this browser bundle. The Host only loads client.js at DSH
+     * startup, so a refreshed page can still run an older UI after an upgrade;
+     * showing this constant lets the user compare it with the pluginVersion
+     * reported by gopeed_process and restart DSH when they differ.
+     */
+    const CLIENT_VERSION = '0.2.0'
+
     /** One line of small inline hint text. */
     function note(style, text) {
       return h('p', { style }, text)
+    }
+
+    /** Compact byte count for an overlay notice (base 1024); '' when unknown. */
+    function formatBytes(bytes) {
+      const n = Number(bytes)
+      if (!Number.isFinite(n) || n <= 0) return ''
+      const units = ['B', 'KB', 'MB', 'GB', 'TB']
+      let value = n
+      let unit = 0
+      while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024
+        unit += 1
+      }
+      return `${unit === 0 ? String(Math.round(value)) : value.toFixed(2)} ${units[unit]}`
+    }
+
+    /**
+     * Last-resort copy that must never throw: it stages the text in a hidden
+     * textarea, selects it, and asks the browser to copy the selection.
+     * Insecure origins expose no navigator.clipboard, and execCommand may also
+     * be refused or undefined, so every failure path is silent.
+     * @param {string} text
+     * @returns {boolean} whether the browser reported success
+     */
+    function copyBySelection(text) {
+      try {
+        if (typeof document === 'undefined' || !document.body) return false
+        const area = document.createElement('textarea')
+        area.value = text
+        area.setAttribute('readonly', 'readonly')
+        area.style.position = 'fixed'
+        area.style.top = '-1000px'
+        area.style.left = '-1000px'
+        area.style.opacity = '0'
+        document.body.appendChild(area)
+        area.select()
+        let done = false
+        try {
+          done = typeof document.execCommand === 'function' && document.execCommand('copy')
+        } catch (ignored) {
+          done = false
+        }
+        document.body.removeChild(area)
+        return done === true
+      } catch (ignored) {
+        return false
+      }
     }
 
     /**
@@ -159,11 +423,133 @@ window.__ModuleLoader__.load({
       const [exePath, setExePath] = React.useState(
         typeof value.exePath === 'string' ? value.exePath : '',
       )
+      const initialWebhookMode =
+        value.webhookMode === 'manual' || value.webhookMode === 'auto' ? value.webhookMode : 'off'
+      const [webhookMode, setWebhookMode] = React.useState(initialWebhookMode)
+      const [webhookPort, setWebhookPort] = React.useState(
+        value.webhookPort === undefined || value.webhookPort === null ? '0' : String(value.webhookPort),
+      )
       const [busy, setBusy] = React.useState(false)
       const [notice, setNotice] = React.useState('')
       const [error, setError] = React.useState('')
+      // Briefly true after a successful copy so the button can say "Copied".
+      const [copied, setCopied] = React.useState(false)
+      const copiedTimer = React.useRef(null)
+      // Restart is a destructive user action: it has its own busy flag and its own result line.
+      const [restarting, setRestarting] = React.useState(false)
+      const [restartResult, setRestartResult] = React.useState(null)
+      React.useEffect(
+        () => () => {
+          if (copiedTimer.current) clearTimeout(copiedTimer.current)
+        },
+        [],
+      )
+
+      // Any port already present in the form counts as spent, so the random
+      // button never hands back a value the user is already looking at.
+      const storedWebhookPort = Number(value.webhookPort)
+      if (Number.isInteger(storedWebhookPort) && storedWebhookPort > 0) {
+        pickedWebhookPorts.add(storedWebhookPort)
+      }
 
       const baseUrl = `http://${host.trim() || '?'}:${port.trim() || '?'}`
+      const webhookPortNumber = Number(webhookPort.trim())
+      /** The status panel only shows a URL when the port is actually pinned. */
+      const webhookPortFixed = Number.isInteger(webhookPortNumber) && webhookPortNumber > 0
+      /** Only manual mode exposes the port controls and a copyable URL. */
+      const webhookPortFieldVisible = webhookMode === 'manual'
+      const webhookUrl = `http://${WEBHOOK_LOCAL_HOST}:${webhookPortNumber}${WEBHOOK_PATH}`
+
+      /** Flip the button label to "Copied" for about 1.5 seconds. */
+      const markCopied = () => {
+        setCopied(true)
+        if (copiedTimer.current) clearTimeout(copiedTimer.current)
+        copiedTimer.current = setTimeout(() => setCopied(false), 1500)
+      }
+
+      /**
+       * Copy the generated webhook URL. navigator.clipboard does not exist on
+       * insecure origins, so a missing API degrades to a selection copy and
+       * then to doing nothing; clicking must never raise.
+       */
+      const copyWebhookUrl = () => {
+        const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+        if (clipboard && typeof clipboard.writeText === 'function') {
+          try {
+            const pending = clipboard.writeText(webhookUrl)
+            if (pending && typeof pending.then === 'function') {
+              pending.then(markCopied, () => copyBySelection(webhookUrl))
+              return
+            }
+            markCopied()
+            return
+          } catch (ignored) {
+            // Fall through to the selection-based copy below.
+          }
+        }
+        copyBySelection(webhookUrl)
+      }
+
+      /** Fill in a random free-looking port from 20000-65000, never a repeat. */
+      const randomWebhookPort = () => {
+        const low = 20000
+        const high = 65000
+        let candidate = low + Math.floor(Math.random() * (high - low + 1))
+        let steps = 0
+        while (pickedWebhookPorts.has(candidate) && steps < high - low + 1) {
+          candidate = candidate === high ? low : candidate + 1
+          steps += 1
+        }
+        pickedWebhookPorts.add(candidate)
+        setWebhookPort(String(candidate))
+      }
+
+      /**
+       * Restart Gopeed through the authenticated Host route. The Host does the killing and the
+       * launching; this handler only asks (after a native confirmation) and reports the result.
+       * Restarting is deliberately unavailable to the agent: this button is the only entry point.
+       */
+      const restartGopeed = async () => {
+        setRestartResult(null)
+        try {
+          if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+            if (!window.confirm(t('restartConfirm'))) return
+          }
+        } catch (ignored) {
+          // A host environment without window.confirm must not block the action silently.
+        }
+        setRestarting(true)
+        try {
+          const response = await fetch(RESTART_ROUTE, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify({ confirm: true }),
+          })
+          let payload = null
+          try {
+            payload = await response.json()
+          } catch (ignored) {
+            payload = null
+          }
+          if (response.ok && payload && payload.ok === true) {
+            setRestartResult({ ok: true, message: t('restartOk') })
+          } else {
+            const reason =
+              response.status === 404
+                ? t('restartUnavailable')
+                : (payload && payload.message) || `HTTP ${response.status}`
+            setRestartResult({ ok: false, message: `${t('restartFail')}${reason}` })
+          }
+        } catch (failure) {
+          setRestartResult({
+            ok: false,
+            message: `${t('restartFail')}${failure && failure.message ? failure.message : String(failure)}`,
+          })
+        } finally {
+          setRestarting(false)
+        }
+      }
 
       const save = async () => {
         setNotice('')
@@ -179,6 +565,19 @@ window.__ModuleLoader__.load({
           setError(t('portInvalid'))
           return
         }
+        const webhookPortText = webhookPort.trim()
+        const webhookPortValue = Number(webhookPortText)
+        if (
+          webhookPortText === '' ||
+          !Number.isInteger(webhookPortValue) ||
+          webhookPortValue < 0 ||
+          webhookPortValue > 65535
+        ) {
+          setError(t('webhookPortInvalid'))
+          return
+        }
+        const nextWebhookMode =
+          webhookMode === 'manual' || webhookMode === 'auto' ? webhookMode : 'off'
         const ops = []
         if (nextHost !== String(value.host ?? '')) ops.push({ op: 'set', path: ['host'], value: nextHost })
         if (portNumber !== Number(value.port ?? 0)) ops.push({ op: 'set', path: ['port'], value: portNumber })
@@ -186,6 +585,14 @@ window.__ModuleLoader__.load({
         if (nextToken.length > 0) ops.push({ op: 'set', path: ['token'], value: nextToken })
         const nextExe = exePath.trim()
         if (nextExe !== String(value.exePath ?? '')) ops.push({ op: 'set', path: ['exePath'], value: nextExe })
+        const storedWebhookMode =
+          value.webhookMode === 'manual' || value.webhookMode === 'auto' ? value.webhookMode : 'off'
+        if (nextWebhookMode !== storedWebhookMode) {
+          ops.push({ op: 'set', path: ['webhookMode'], value: nextWebhookMode })
+        }
+        if (webhookPortValue !== Number(value.webhookPort ?? 0)) {
+          ops.push({ op: 'set', path: ['webhookPort'], value: webhookPortValue })
+        }
         if (ops.length === 0) {
           setNotice(t('noChanges'))
           return
@@ -214,6 +621,7 @@ window.__ModuleLoader__.load({
           'div',
           { style: styles.head },
           h('span', { style: styles.title }, t('title')),
+          h('span', { style: styles.version, title: `dsh-gopeed client ${CLIENT_VERSION}` }, `v${CLIENT_VERSION}`),
           h('span', { style: styles.base }, `${t('base')} ${baseUrl}`),
         ),
         h(
@@ -288,6 +696,129 @@ window.__ModuleLoader__.load({
         ),
         h(
           'div',
+          { style: styles.field },
+          h('span', { style: styles.label }, t('webhook')),
+          note(styles.hint, t('webhookHint')),
+          WEBHOOK_MODES.map((mode) =>
+            h(
+              'label',
+              { key: mode, style: styles.option },
+              h(
+                'span',
+                { style: styles.optionHead },
+                h('input', {
+                  type: 'radio',
+                  name: 'dsh-gopeed-webhook-mode',
+                  value: mode,
+                  checked: webhookMode === mode,
+                  disabled: busy || state.writable === false,
+                  onChange: () => setWebhookMode(mode),
+                }),
+                h('span', { style: styles.optionLabel }, t(WEBHOOK_MODE_LABEL[mode])),
+              ),
+              h('span', { style: { ...styles.hint, display: 'block' } }, t(WEBHOOK_MODE_HINT[mode])),
+            ),
+          ),
+        ),
+        webhookPortFieldVisible
+          ? h(
+              'div',
+              { style: styles.field },
+              h('label', { style: styles.label, htmlFor: 'dsh-gopeed-webhook-port' }, t('webhookPort')),
+              h(
+                'div',
+                { style: styles.row },
+                h('input', {
+                  id: 'dsh-gopeed-webhook-port',
+                  className: PORT_CLASS,
+                  // Same reasoning as the Gopeed API port above: a text input plus
+                  // inputMode avoids the native spinner entirely.
+                  style: { ...styles.input, flex: '1 1 140px', width: 'auto', minWidth: 0 },
+                  type: 'text',
+                  inputMode: 'numeric',
+                  autoComplete: 'off',
+                  value: webhookPort,
+                  disabled: busy || state.writable === false,
+                  onChange: (event) => setWebhookPort(event.target.value),
+                }),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    style: styles.button,
+                    disabled: busy || state.writable === false,
+                    onClick: randomWebhookPort,
+                  },
+                  t('webhookPortRandom'),
+                ),
+              ),
+              note(styles.hint, t('webhookPortHint')),
+            )
+          : null,
+        h(
+          'div',
+          { style: styles.panel },
+          h('span', { style: styles.label }, t('webhookStatus')),
+          note(styles.note, `${t('webhookStatusMode')}: ${t(WEBHOOK_MODE_LABEL[webhookMode])}`),
+          // Each mode says only what applies to it: off is a warning, manual
+          // shows the concrete URL (or why there is none yet), auto explains
+          // that the plugin writes it and that Gopeed must restart.
+          webhookMode === 'off' ? note(styles.errNote, t('webhookOffWarning')) : null,
+          webhookMode === 'manual' && webhookPortFixed
+            ? h(
+                'div',
+                { style: styles.field },
+                h('span', { style: styles.label }, t('webhookUrl')),
+                h(
+                  'div',
+                  { style: styles.row },
+                  h('code', { style: styles.url }, webhookUrl),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      style: styles.button,
+                      title: webhookUrl,
+                      onClick: copyWebhookUrl,
+                    },
+                    copied ? t('webhookCopied') : t('webhookCopy'),
+                  ),
+                ),
+              )
+            : null,
+          webhookMode === 'manual' && !webhookPortFixed
+            ? note(styles.warnNote, t('webhookUrlUnfixed'))
+            : null,
+          webhookMode === 'manual' && webhookPortFixed
+            ? note(styles.hint, t('webhookManualStep'))
+            : null,
+          webhookMode === 'manual' ? note(styles.warnNote, t('webhookNeedPeer')) : null,
+          webhookMode === 'auto' ? note(styles.note, t('webhookAutoNote')) : null,
+          webhookMode === 'auto' ? note(styles.warnNote, t('webhookRestartWarning')) : null,
+          // The only restart entry point in the whole plugin. It is a user gesture by design:
+          // no tool and no agent call can reach the Host restart route.
+          h(
+            'div',
+            { style: styles.row },
+            h(
+              'button',
+              {
+                type: 'button',
+                style: restarting ? { ...styles.danger, ...styles.dangerBusy } : styles.danger,
+                disabled: restarting,
+                onClick: restartGopeed,
+                title: t('restartHint'),
+              },
+              restarting ? t('restarting') : t('restart'),
+            ),
+            note(styles.hint, t('restartHint')),
+          ),
+          restartResult
+            ? note(restartResult.ok ? styles.okNote : styles.errNote, restartResult.message)
+            : null,
+        ),
+        h(
+          'div',
           { style: styles.row },
           h(
             'button',
@@ -297,6 +828,112 @@ window.__ModuleLoader__.load({
           notice ? note(styles.okNote, notice) : null,
           error ? note(styles.errNote, error) : null,
           !notice && !error ? note(styles.hint, t('verify')) : null,
+        ),
+        // Outside the webhook status panel on purpose: this is about the page itself (a stale
+        // browser bundle), not about the webhook mode, so it must not look like part of that box.
+        note(styles.hint, t('versionHint')),
+      )
+    }
+
+    /**
+     * App-wide download notice. Mounted in `shell.overlay`, i.e. outside the conversation, so it
+     * never appears as a chat message. It polls the Host feed only while the page is visible; when
+     * notifications are disabled, or the Host has no Connection route, it renders nothing.
+     * @param {{ i18n?: (key: string) => string }} props
+     */
+    function NotificationOverlay(props) {
+      const t = typeof props.i18n === 'function' ? props.i18n : (key) => zh[key] || key
+      const [items, setItems] = React.useState([])
+      const cursor = React.useRef(0)
+      React.useEffect(() => {
+        let alive = true
+        let timer = null
+        // The first successful poll only positions the cursor: events that arrived before this
+        // page was opened are history, and replaying them as a stack of toasts would be noise.
+        let primed = false
+        const timers = new Set()
+        const dismiss = (id) => {
+          if (alive) setItems((list) => list.filter((item) => item.id !== id))
+        }
+        const poll = async () => {
+          if (typeof document !== 'undefined' && document.hidden) return
+          try {
+            const response = await fetch(`${NOTIFY_ROUTE}?since=${cursor.current}`, {
+              credentials: 'same-origin',
+              headers: { accept: 'application/json' },
+            })
+            if (!response.ok) return
+            const data = await response.json()
+            if (!data || data.enabled !== true || !Array.isArray(data.events)) return
+            if (!primed) {
+              primed = true
+              cursor.current = typeof data.latest === 'number' ? data.latest : 0
+              return
+            }
+            if (typeof data.latest === 'number' && data.latest < cursor.current) {
+              // The Host restarted and reset its counter: accept everything it has again.
+              cursor.current = 0
+            }
+            const fresh = data.events.filter(
+              (entry) => entry && typeof entry.seq === 'number' && entry.seq > cursor.current,
+            )
+            if (fresh.length === 0) return
+            cursor.current = fresh[fresh.length - 1].seq
+            const added = fresh.map((entry) => ({
+              id: `${entry.seq}-${entry.at}`,
+              failed: entry.event === 'DOWNLOAD_ERROR',
+              name: entry.name || entry.taskId || '',
+              size: formatBytes(entry.sizeBytes),
+              path: entry.path || '',
+            }))
+            if (!alive) return
+            setItems((list) => [...list, ...added].slice(-NOTIFY_MAX_VISIBLE))
+            for (const item of added) {
+              const hold = setTimeout(() => {
+                timers.delete(hold)
+                dismiss(item.id)
+              }, NOTIFY_HOLD_MS)
+              timers.add(hold)
+            }
+          } catch (ignored) {
+            // Route absent (no Connection carrier) or a transient failure: stay silent.
+          }
+        }
+        const tick = () => {
+          poll().finally(() => {
+            if (alive) timer = setTimeout(tick, NOTIFY_POLL_MS)
+          })
+        }
+        tick()
+        return () => {
+          alive = false
+          if (timer) clearTimeout(timer)
+          for (const hold of timers) clearTimeout(hold)
+        }
+      }, [])
+      if (items.length === 0) return null
+      return h(
+        'div',
+        { style: styles.toasts },
+        items.map((item) =>
+          h(
+            'div',
+            { key: item.id, style: styles.toast, role: 'status' },
+            h('div', { style: styles.toastTitle }, item.failed ? t('notifyFailed') : t('notifyDone')),
+            h('div', { style: styles.toastText }, item.size ? `${item.name} (${item.size})` : item.name),
+            item.path ? h('div', { style: styles.toastPath }, item.path) : null,
+            h(
+              'button',
+              {
+                type: 'button',
+                style: styles.toastClose,
+                title: t('notifyDismiss'),
+                'aria-label': t('notifyDismiss'),
+                onClick: () => dismiss(item.id),
+              },
+              'x',
+            ),
+          ),
         ),
       )
     }
@@ -333,6 +970,14 @@ window.__ModuleLoader__.load({
         ctx.slots.register(
           { name: SLOT, key: KEY, locale: NS, inject: () => ({ i18n: t }) },
           GopeedConfig,
+        ),
+      )
+      // App-wide overlay notice for finished downloads. Registered in the global overlay slot so
+      // the notice is never rendered inside the conversation or as one of the user's messages.
+      ctx.slots.inject(OVERLAY_SLOT, () =>
+        ctx.slots.register(
+          { name: OVERLAY_SLOT, id: 'dsh-gopeed.notifications', locale: NS, inject: () => ({ i18n: t }) },
+          NotificationOverlay,
         ),
       )
     }

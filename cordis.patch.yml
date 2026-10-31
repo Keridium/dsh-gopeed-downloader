@@ -14,8 +14,8 @@
 # `port: 0` is the auto-detect default, not a Gopeed port: the desktop build
 # listens on 127.0.0.1:0, a random port per launch, so the plugin asks Windows
 # which port the running process actually holds. Put a fixed number here (and in
-# Gopeed) only to pin one; `9999` is this plugin's convention, never a Gopeed
-# default.
+# Gopeed) only to pin one; any concrete number is just an example, there is no
+# default port to memorize.
 - insert:
     - id: gopeed
       name: dsh-gopeed
