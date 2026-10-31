@@ -1,6 +1,6 @@
 {
   "name": "dsh-gopeed",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "description": "DSH plugin that turns a local Gopeed downloader into agent tools (add, list, pause, resume, remove) with a configurable host, port and API token.",
   "type": "module",
