@@ -12,7 +12,7 @@ through your output, a shell, or the model.
 
 Use them when the user:
 
-- asks to download something -- a URL, a magnet link, a `.torrent` URL;
+- asks to download something -- a direct HTTP/HTTPS URL, a magnet link, or a remote `.torrent` URL;
 - asks about the progress, speed or location of a download;
 - asks to pause, resume or cancel a download;
 - asks whether Gopeed is installed, running, or reachable, or why a download did not start.

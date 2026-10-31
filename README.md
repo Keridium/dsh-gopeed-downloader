@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <b>7 tools</b> &nbsp;|&nbsp; downloads anywhere, process control <b>Windows-only</b> &nbsp;|&nbsp; needs <b>Gopeed 1.9.3+</b>
+  <b>7 tools</b> &nbsp;|&nbsp; HTTP, magnet and <code>.torrent</code> URLs &nbsp;|&nbsp; process control <b>Windows-only</b> &nbsp;|&nbsp; needs <b>Gopeed 1.9.3+</b>
 </p>
 
 > [!IMPORTANT]
@@ -25,6 +25,11 @@ Turn a local **[Gopeed](https://gopeed.com/)** download manager into agent tools
 (DSH)**: start downloads, follow them, steer them, diagnose or launch the Gopeed process, and receive
 download-complete events -- including a background job that wakes an idle agent.
 
+Any link Gopeed itself accepts works: **HTTP/HTTPS direct links**, **magnet links** and **remote `.torrent`
+URLs**. A local `.torrent` file is not accepted -- there is no upload path, so hand over the URL it came
+from instead. BitTorrent detail (peers, DHT, trackers, seeding) stays with Gopeed; the plugin creates the task
+and reads its progress, nothing more.
+
 The agent hands a URL to Gopeed over its loopback HTTP endpoint; Gopeed owns the outbound traffic and the
 files on disk, so nothing passes through the model or a shell. Gopeed's desktop build listens on a random port
 per launch by default, so the plugin reads the live port from the running process (`port: 0`) unless you pin
@@ -34,7 +39,7 @@ one. See [Configuration](#configuration).
 
 | Goal | Tool |
 |---|---|
-| Start a download and be told when it ends | `gopeed_add` -- returns a background job; the completion notice is DSH's own, so a busy agent reads it next step and an idle agent is woken. |
+| Start a download and be told when it ends | `gopeed_add` -- takes a direct link, a magnet link or a remote `.torrent` URL, and returns a background job; the completion notice is DSH's own, so a busy agent reads it next step and an idle agent is woken. |
 | Watch progress | `gopeed_list`, `gopeed_status` -- one flat task shape (`percent`, `sizeKnown`, speed, real save directory). |
 | Steer a download | `gopeed_control` -- pause / resume / remove through an `action` enum. `remove` deletes the files too unless `force: false`. |
 | Fix the setup | `gopeed_process` -- one of six verdicts plus pid, memory, version, executable path and webhook status. |

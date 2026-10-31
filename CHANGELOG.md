@@ -11,6 +11,10 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
 
 ### Changed
 
+- **The README states which link types work.** Direct HTTP/HTTPS links, magnet links and remote `.torrent`
+  URLs all work; a local `.torrent` file does not, because the plugin has no upload path -- pass the URL it
+  came from. BitTorrent detail (peers, DHT, trackers, seeding) stays with Gopeed, which is worth saying because
+  "downloader" otherwise suggests the plugin manages the transfer itself.
 - **The documentation is split in two, and the README is a landing page again.** `README.md` keeps the
   first screen -- what the plugin is, what it cannot do, installation, the settings defaults and the numbered
   known limitations -- and folds the design argument, the prompt-footprint measurement, the implementation
