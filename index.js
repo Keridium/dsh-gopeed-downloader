@@ -655,8 +655,8 @@ export function apply(ctx, config) {
       // warning about using a shell at all.
       order: Number.isFinite(webOrder) ? webOrder - 10 : 1990,
       text:
-        'Downloads: gopeed_add over curl/wget (background job, notifies on completion, no polling). ' +
-        'Shell remains right for everything else.',
+        'Downloads: gopeed_add, not a shell download (background job, notifies, no polling). ' +
+        'Use the shell for everything else.',
     })
   }
   if (typeof ctx.inject === 'function') {
