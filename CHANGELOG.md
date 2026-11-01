@@ -14,10 +14,26 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
 - **A system-prompt section, because the agent contract was never being read.** `docs/AGENTS.md` explains
   when to use these tools and what not to do with them, but nothing loads that file automatically: an agent
   that never opens it behaves exactly as if the contract did not exist, and the symptom is an agent reaching
-  for `curl` to download something the plugin exists to download. The plugin now registers one prompt section
-  (`tool:gopeed`, order just after the shell tools, 97 characters) stating that downloads go through
-  `gopeed_add` rather than a shell and that progress must not be polled. It is an optional dependency: a host
+  for a shell to download something the plugin exists to download. One prompt section (`tool:gopeed`, placed
+  with the network tools, 97 characters) now says that `gopeed_add` is the default download tool, that it
+  runs as a background job, and that progress must not be polled. It is an optional dependency: a host
   without the `systemPrompt` service still gets the seven tools, just without the reminder.
+
+### Changed
+
+- **The agent contract now says not to download with a shell.** `docs/AGENTS.md` gained the rule that a
+  download goes through `gopeed_add` rather than `curl`/`wget`/`Invoke-WebRequest`, and why: a shell
+  download blocks the turn, cannot be paused or resumed, and leaves the session with nothing to wait on.
+- **The package is published on npm.** The README now leads with the registry install and keeps the Git spec
+  as the pinned alternative. Nothing has to be installed on the machine first -- the profile carries its own
+  package manager -- and `publishConfig` pins publishing to the public registry.
+
+### Documentation
+
+- The settings page is documented with two screenshots behind a collapsed `Screenshots` block inside
+  Configuration.
+- Local development paths in this file and in the README were replaced with placeholders before the package
+  was published.
 
 ## [0.3.2] - 2026-11-01
 
