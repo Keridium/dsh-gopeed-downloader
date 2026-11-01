@@ -7,6 +7,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries a
 this file is part of the repository that both people and agents read; the Chinese edition of the
 project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gopeed-downloader/blob/main/docs/README.zh.md).
 
+## [Unreleased]
+
+### Added
+
+- **A system-prompt section, because the agent contract was never being read.** `docs/AGENTS.md` explains
+  when to use these tools and what not to do with them, but nothing loads that file automatically: an agent
+  that never opens it behaves exactly as if the contract did not exist, and the symptom is an agent reaching
+  for `curl` to download something the plugin exists to download. The plugin now registers one prompt section
+  (`tool:gopeed`, order just after the shell tools, 218 characters) stating that downloads go through
+  `gopeed_add` rather than a shell and that progress must not be polled. It is an optional dependency: a host
+  without the `systemPrompt` service still gets the seven tools, just without the reminder.
+
 ## [0.3.2] - 2026-11-01
 
 ### Fixed

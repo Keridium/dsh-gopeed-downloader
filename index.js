@@ -640,6 +640,30 @@ export function apply(ctx, config) {
     else ctx.logger?.info?.('dsh-gopeed-downloader: no sandbox service; launch and stop will be reported as unconfined')
   }
 
+  // The agent-facing contract lives in docs/AGENTS.md, and nothing loads that file automatically: an
+  // agent that never opens it behaves as if the contract did not exist. This section puts the one rule
+  // that prevents the most common wrong call into the system prompt itself. It sits right after the
+  // shell tools on purpose -- the moment to read it is just before reaching for a shell.
+  const installPromptSection = (scoped) => {
+    const prompt = scoped?.systemPrompt
+    if (!prompt || typeof prompt.section !== 'function') return
+    const shellOrder = typeof prompt.getSectionOrder === 'function' ? prompt.getSectionOrder('TOOL_PWSH') : undefined
+    prompt.section({
+      name: 'tool:gopeed',
+      // Fall back to a slot inside the tool range when the host ships no TOOL_PWSH placement.
+      order: Number.isFinite(shellOrder) ? shellOrder + 5 : 3040,
+      text:
+        'Downloads: use gopeed_add instead of curl, wget or Invoke-WebRequest. It hands the transfer ' +
+        'to Gopeed, returns a background job immediately, and notifies this session when the transfer ' +
+        'ends -- do not poll for progress.',
+    })
+  }
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['systemPrompt'], installPromptSection)
+  } else if (lookupService(ctx, 'systemPrompt')) {
+    installPromptSection(ctx)
+  }
+
   /**
    * Resolve the port to talk to: the configured one, or the port the running process actually
    * holds. Returns 0 when detection is impossible (no process, or the OS view is restricted).
