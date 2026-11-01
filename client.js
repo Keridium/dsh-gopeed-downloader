@@ -1,6 +1,6 @@
 /**
- * Web half of dsh-gopeed: renders the configuration page for the `gopeed`
- * row of this bundle (Plugins -> Installed -> dsh-gopeed -> row gopeed),
+ * Web half of dsh-gopeed-downloader: renders the configuration page for the `gopeed`
+ * row of this bundle (Plugins -> Installed -> dsh-gopeed-downloader -> row gopeed),
  * where the user fills in the Gopeed API host / port / token.
  *
  * Configuration is read and written by the Plugins page itself: the owner
@@ -17,17 +17,17 @@
  * is model-facing is English.
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-gopeed',
+  id: 'dsh-gopeed-downloader',
   factory(require) {
     const React = require('react')
     const h = React.createElement
 
     /** Client locale namespace owned by this plugin. */
-    const NS = 'dsh-gopeed'
+    const NS = 'dsh-gopeed-downloader'
     /** Slot that renders one plugin row's configuration page. */
     const SLOT = 'plugins.row.config'
     /** Key rule: `<package name>#<row id declared in cordis.patch.yml>`. */
-    const KEY = 'dsh-gopeed#gopeed'
+    const KEY = 'dsh-gopeed-downloader#gopeed'
     /**
      * Global overlay slot: every app-wide transient notice (toasts, dialogs) mounts here.
      * This is how a download-complete notice reaches the user WITHOUT writing into the chat.
@@ -39,8 +39,8 @@ window.__ModuleLoader__.load({
      * same): the app may be mounted below a directory, and the HttpOnly session cookie is sent
      * automatically, so no token ever has to travel through the config form.
      */
-    const NOTIFY_ROUTE = 'api/dsh-gopeed/notifications'
-    const RESTART_ROUTE = 'api/dsh-gopeed/restart'
+    const NOTIFY_ROUTE = 'api/dsh-gopeed-downloader/notifications'
+    const RESTART_ROUTE = 'api/dsh-gopeed-downloader/restart'
     /** How often the page asks the Host for download notices while it is visible. */
     const NOTIFY_POLL_MS = 5000
     /** How long one overlay notice stays on screen before it dismisses itself. */
@@ -430,7 +430,7 @@ window.__ModuleLoader__.load({
      * showing this constant lets the user compare it with the pluginVersion
      * reported by gopeed_process and restart DSH when they differ.
      */
-    const CLIENT_VERSION = '0.3.1'
+    const CLIENT_VERSION = '0.3.2'
 
     /** One line of small inline hint text. */
     function note(style, text) {
@@ -743,7 +743,7 @@ window.__ModuleLoader__.load({
           'div',
           { style: styles.head },
           h('span', { style: styles.title }, t('title')),
-          h('span', { style: styles.version, title: `dsh-gopeed client ${CLIENT_VERSION}` }, `v${CLIENT_VERSION}`),
+          h('span', { style: styles.version, title: `dsh-gopeed-downloader client ${CLIENT_VERSION}` }, `v${CLIENT_VERSION}`),
           h('span', { style: styles.base }, `${t('base')} ${baseUrl}`),
         ),
         // Save location comes before the connection fields on purpose: it is the setting a user
@@ -1216,7 +1216,7 @@ window.__ModuleLoader__.load({
      */
     function apply(ctx) {
       const t = ctx.locale.bind(NS)
-      ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-gopeed: locale')
+      ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-gopeed-downloader: locale')
       ctx.slots.inject(SLOT, () =>
         ctx.slots.register(
           { name: SLOT, key: KEY, locale: NS, inject: () => ({ i18n: t }) },
@@ -1227,7 +1227,7 @@ window.__ModuleLoader__.load({
       // the notice is never rendered inside the conversation or as one of the user's messages.
       ctx.slots.inject(OVERLAY_SLOT, () =>
         ctx.slots.register(
-          { name: OVERLAY_SLOT, id: 'dsh-gopeed.notifications', locale: NS, inject: () => ({ i18n: t }) },
+          { name: OVERLAY_SLOT, id: 'dsh-gopeed-downloader.notifications', locale: NS, inject: () => ({ i18n: t }) },
           NotificationOverlay,
         ),
       )

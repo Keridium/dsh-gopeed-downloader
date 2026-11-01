@@ -7,6 +7,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries a
 this file is part of the repository that both people and agents read; the Chinese edition of the
 project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gopeed-downloader/blob/main/docs/README.zh.md).
 
+## [0.3.2] - 2026-11-01
+
+### Fixed
+
+- **The rename to `dsh-gopeed-downloader` broke the web client on startup.** Two constants in `client.js`
+  still carried the old package name. The client-module loader requires the id passed to
+  `__ModuleLoader__.load({ id })` to equal the package name, so every page boot reported the plugin as
+  `not-registered` and the whole client half never loaded. The settings slot key is
+  `${package}#${rowId}`, so the row would also have lost its configuration entry even after the module
+  started loading. Both constants now use the new name.
+
+### Changed
+
+- **The notification and restart routes moved to `/api/dsh-gopeed-downloader/...`**, matching the package
+  name that the client half and the documented URLs already used.
+- **Version bumped in all three hand-written places**: `package.json`, `CLIENT_VERSION` in `client.js`
+  and `FALLBACK_VERSION` in `index.js`. The published 0.3.1 assets were built before this fix, so every
+  release up to 0.3.1 is marked pre-release.
+
+### Notes
+
+- The DOM ids, `htmlFor` targets and CSS class names still say `dsh-gopeed`. They are paired only inside
+  `client.js`, so renaming them would mean touching nineteen coordinated places for no functional gain.
+
 ## [0.3.1] - 2026-11-01
 
 ### Fixed

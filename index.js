@@ -1,10 +1,10 @@
 /**
- * dsh-gopeed - exposes the Gopeed downloader REST API as DSH agent tools.
+ * dsh-gopeed-downloader - exposes the Gopeed downloader REST API as DSH agent tools.
  *
  * Layout:
  * - Config: downloadTarget / customDownloadPath / host / port / token / timeoutMs / exePath /
  *   portScan / webhookMode / webhookPort / webhookNotify / webhookToast, all `.volatile()`, so edits
- *   in the DSH settings UI (Plugins -> Installed -> dsh-gopeed -> Config) take effect immediately.
+ *   in the DSH settings UI (Plugins -> Installed -> dsh-gopeed-downloader -> Config) take effect immediately.
  * - apply: registers six tools on ctx.tools (add / list / status / control / process / launch) plus
  *   gopeed_events, and starts the loopback webhook receiver when webhookMode is manual or auto.
  *   With webhookNotify on, an accepted event is delivered through up to THREE channels, none of
@@ -96,7 +96,7 @@ export const inject = ['tools']
  * the user they are seeing a stale UI and need to restart DSH - without this field there is nothing
  * to compare against. A missing or unreadable package.json falls back to the constant below.
  */
-const FALLBACK_VERSION = '0.3.1'
+const FALLBACK_VERSION = '0.3.2'
 
 const PLUGIN_VERSION = (() => {
   try {
@@ -495,7 +495,7 @@ export function apply(ctx, config) {
           }
         }
       } catch (error) {
-        ctx.logger?.warn?.(`dsh-gopeed: sandbox policy resolution failed: ${asciiText(error?.message || error)}`)
+        ctx.logger?.warn?.(`dsh-gopeed-downloader: sandbox policy resolution failed: ${asciiText(error?.message || error)}`)
       }
     }
     // No policy service: mirror the policy package's documented fail-safe defaults instead of
@@ -624,7 +624,7 @@ export function apply(ctx, config) {
     sandboxRuntime.sandbox = scoped?.sandbox ?? null
     sandboxRuntime.policy = lookupService(scoped, 'sandboxPolicy')
     const detail = sandboxRuntime.policy ? 'policy service available' : 'no policy service, read-only default'
-    ctx.logger?.info?.(`dsh-gopeed: sandbox available (${detail}); launch and stop are confined`)
+    ctx.logger?.info?.(`dsh-gopeed-downloader: sandbox available (${detail}); launch and stop are confined`)
     scoped?.effect?.(() => () => {
       sandboxRuntime.sandbox = null
       sandboxRuntime.policy = null
@@ -637,7 +637,7 @@ export function apply(ctx, config) {
     // Simplified hosts / tests without Cordis injection: use a direct lookup once.
     const sandbox = lookupService(ctx, 'sandbox')
     if (sandbox) installSandbox({ sandbox, effect: (fn) => ctx.effect?.(fn) })
-    else ctx.logger?.info?.('dsh-gopeed: no sandbox service; launch and stop will be reported as unconfined')
+    else ctx.logger?.info?.('dsh-gopeed-downloader: no sandbox service; launch and stop will be reported as unconfined')
   }
 
   /**
@@ -1209,7 +1209,7 @@ export function apply(ctx, config) {
 
   /**
    * Build the plain-ASCII message the model reads. One line per outcome keeps the merged form as
-   * compact as the single form; the `[dsh-gopeed]` prefix marks it as plugin push, not user speech.
+   * compact as the single form; the `[dsh-gopeed-downloader]` prefix marks it as plugin push, not user speech.
    * @param {object[]} batch Accepted events to merge.
    * @param {number} overflow Events dropped from the batch.
    */
@@ -1219,18 +1219,18 @@ export function apply(ctx, config) {
     const lines = []
     if (finished.length === 1) {
       lines.push(
-        `[dsh-gopeed] Download finished: ${notificationItem(finished[0])} -> ${finished[0].path || '(no path)'}`,
+        `[dsh-gopeed-downloader] Download finished: ${notificationItem(finished[0])} -> ${finished[0].path || '(no path)'}`,
       )
     } else if (finished.length > 1) {
-      lines.push(`[dsh-gopeed] ${finished.length} downloads finished: ${finished.map(notificationItem).join('; ')}`)
+      lines.push(`[dsh-gopeed-downloader] ${finished.length} downloads finished: ${finished.map(notificationItem).join('; ')}`)
     }
     if (failed.length === 1) {
-      lines.push(`[dsh-gopeed] Download failed: ${notificationItem(failed[0])} -> ${failed[0].path || '(no path)'}`)
+      lines.push(`[dsh-gopeed-downloader] Download failed: ${notificationItem(failed[0])} -> ${failed[0].path || '(no path)'}`)
     } else if (failed.length > 1) {
-      lines.push(`[dsh-gopeed] ${failed.length} downloads failed: ${failed.map(notificationItem).join('; ')}`)
+      lines.push(`[dsh-gopeed-downloader] ${failed.length} downloads failed: ${failed.map(notificationItem).join('; ')}`)
     }
     if (overflow > 0) {
-      lines.push(`[dsh-gopeed] ${overflow} more download event(s) not listed; call gopeed_events for the full list.`)
+      lines.push(`[dsh-gopeed-downloader] ${overflow} more download event(s) not listed; call gopeed_events for the full list.`)
     }
     return lines.join('\n')
   }
@@ -1271,17 +1271,17 @@ export function apply(ctx, config) {
       const agent = liveAgent()
       if (!agent) return
       agent.inject({
-        id: `dsh-gopeed-notify-${Date.now()}`,
+        id: `dsh-gopeed-downloader-notify-${Date.now()}`,
         // Agent.inject only accepts a UserMessage, so role stays 'user'; the source is what names
         // the real producer. dsh-agent's README documents exactly this: followup uses
         // source { kind: 'user' } while a plugin's own input uses { kind: 'my-plugin' }. Using
         // 'user' here is what made the notice render as if the user had typed it.
         role: 'user',
         content: [{ type: 'text', text: buildNotificationText(batch, overflow) }],
-        source: { kind: 'dsh-gopeed' },
+        source: { kind: 'dsh-gopeed-downloader' },
       })
       ctx.logger?.debug?.(
-        `dsh-gopeed: injected ${batch.length} download event(s) as context; last agent seen ${Date.now() - lastAgentAt}ms ago`,
+        `dsh-gopeed-downloader: injected ${batch.length} download event(s) as context; last agent seen ${Date.now() - lastAgentAt}ms ago`,
       )
     } catch {
       // Disposed agent / throwing inject: swallow. The events stay cached and readable.
@@ -1320,15 +1320,15 @@ export function apply(ctx, config) {
 
   // ---------------------------------------------------------------------------------------------
   // Notice feed for the Web UI overlay. This is a separate delivery cursor from the agent channel:
-  // while the page is open, client.js polls GET /api/dsh-gopeed/notifications?since=<seq> and shows
+  // while the page is open, client.js polls GET /api/dsh-gopeed-downloader/notifications?since=<seq> and shows
   // a transient toast. It never marks the receiver buffer as read, so a later gopeed_events call
   // still reports the same unread count. The route is only reachable through the authenticated
   // Connection fetch registry (owner browser Peer); it is not part of the loopback webhook port.
   // ---------------------------------------------------------------------------------------------
 
   /** Paths owned by this plugin on the authenticated Connection fetch registry. */
-  const NOTIFICATIONS_PATH = '/api/dsh-gopeed/notifications'
-  const RESTART_PATH = '/api/dsh-gopeed/restart'
+  const NOTIFICATIONS_PATH = '/api/dsh-gopeed-downloader/notifications'
+  const RESTART_PATH = '/api/dsh-gopeed-downloader/restart'
 
   /** How many recent notices stay available to the page. */
   const MAX_UI_NOTICES = 20
@@ -1442,7 +1442,7 @@ export function apply(ctx, config) {
     const next = createWebhookReceiver({
       port,
       onEvent: (event) => {
-        ctx.logger?.debug?.(`dsh-gopeed: webhook ${event.event} for task ${event.taskId || '(no id)'}`)
+        ctx.logger?.debug?.(`dsh-gopeed-downloader: webhook ${event.event} for task ${event.taskId || '(no id)'}`)
         // The event is already stored at this point; this only decides who gets told about it.
         handleWebhookEvent(event)
       },
@@ -1452,12 +1452,12 @@ export function apply(ctx, config) {
       // Never pretend to listen: keep the reason for diagnostics and retry on the next call,
       // because the conflicting port may have been released in the meantime.
       receiverFailure = `${started.reason}: ${started.message}`
-      ctx.logger?.warn?.(`dsh-gopeed: webhook listener failed: ${receiverFailure}`)
+      ctx.logger?.warn?.(`dsh-gopeed-downloader: webhook listener failed: ${receiverFailure}`)
       return null
     }
     receiver = next
     receiverFailure = ''
-    ctx.logger?.info?.(`dsh-gopeed: webhook listening at ${next.url}`)
+    ctx.logger?.info?.(`dsh-gopeed-downloader: webhook listening at ${next.url}`)
     return receiver
   }
 
@@ -1482,7 +1482,7 @@ export function apply(ctx, config) {
   if (webhookMode() !== 'off') {
     ensureReceiver().catch((error) => {
       receiverFailure = String(error?.message || error)
-      ctx.logger?.warn?.(`dsh-gopeed: webhook listener failed: ${receiverFailure}`)
+      ctx.logger?.warn?.(`dsh-gopeed-downloader: webhook listener failed: ${receiverFailure}`)
     })
   }
 
@@ -1626,8 +1626,8 @@ export function apply(ctx, config) {
   // ---------------------------------------------------------------------------------------------
   // Browser routes. These are the only browser-facing entry points of the plugin, and both are
   // registered on Connection's exact Fetch registry, NOT on the loopback webhook port:
-  // - GET  /api/dsh-gopeed/notifications : authenticated feed for the overlay toast.
-  // - POST /api/dsh-gopeed/restart       : the "Restart Gopeed" button on the config page.
+  // - GET  /api/dsh-gopeed-downloader/notifications : authenticated feed for the overlay toast.
+  // - POST /api/dsh-gopeed-downloader/restart       : the "Restart Gopeed" button on the config page.
   //
   // Access control is provided by Connection, not by hand-rolled tokens: an exact route is only
   // dispatched after the Host/Origin trust fence and browser/API authentication succeed, and its
@@ -1686,7 +1686,7 @@ export function apply(ctx, config) {
           requestBody: 'buffered',
           fetch: async (request) => jsonResponse(200, notificationFeed(request.url)),
         }),
-      'dsh-gopeed: notification feed route',
+      'dsh-gopeed-downloader: notification feed route',
     )
     routeCtx.effect(
       () =>
@@ -1714,7 +1714,7 @@ export function apply(ctx, config) {
             return jsonResponse(outcome.ok ? 200 : 500, outcome)
           },
         }),
-      'dsh-gopeed: restart route',
+      'dsh-gopeed-downloader: restart route',
     )
   }
 
@@ -2149,7 +2149,7 @@ export function apply(ctx, config) {
     '2) In Gopeed open Settings -> Advanced -> Protocol, keep TCP and pin the address to a fixed port such as ' +
     '127.0.0.1:9999 (Gopeed defaults to port 0, a random port per launch; the plugin can usually detect it, but ' +
     'pinning removes the guesswork). ' +
-    '3) If you set a Token on the same page, copy it into the DSH plugin config (Plugins -> Installed -> dsh-gopeed -> Config). ' +
+    '3) If you set a Token on the same page, copy it into the DSH plugin config (Plugins -> Installed -> dsh-gopeed-downloader -> Config). ' +
     '4) Call this tool again to retry.'
 
   /** Actions supported by gopeed_control: verb drives the English text, run sends the request. */
@@ -2955,7 +2955,7 @@ export function apply(ctx, config) {
   })
 
   ctx.logger?.info?.(
-    `dsh-gopeed: registered 7 tools, endpoint ${client.baseUrl()}, webhook mode ${webhookMode()}`,
+    `dsh-gopeed-downloader: registered 7 tools, endpoint ${client.baseUrl()}, webhook mode ${webhookMode()}`,
   )
 }
 
