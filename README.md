@@ -185,6 +185,20 @@ diagnosis unreachable.
     A killed write would risk an unaccounted download; a failed read is cheap to retry, so the same
     treatment is deferred for the rest.
 
+## Design notes
+
+**One tool per endpoint, deliberately.** The seven tools map one-to-one onto Gopeed's HTTP endpoints
+instead of sharing a single `action` dispatcher. That diverges from the heavier style used elsewhere
+in the DSH ecosystem, where one tool (such as `skill` or `bash`) covers a whole feature area. The
+measured cost is **1,452 characters** across all seven definitions -- about **207 per tool**, the
+lowest per-tool footprint of any plugin measured on this machine -- so the shape buys clarity without
+charging the model for it. This plugin is a thin adapter around one downloader, not a framework: it
+does one thing and keeps the context cost near the floor.
+
+**Where it stops paying.** The per-endpoint shape is cheap only while the endpoint count is small. A
+ninth or tenth tool would make a dispatcher the better trade; the 1,100-character target above is the
+line to watch.
+
 ## Going deeper
 
 <details>

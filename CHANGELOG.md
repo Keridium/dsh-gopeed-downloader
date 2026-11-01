@@ -49,6 +49,30 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
   problem. `unauthorized` now counts as running, and the message says the token is wrong instead of
   claiming a start.
 
+### Documentation
+
+- **Development history now lives only in this file.** Thirty-two places across the README, the agent
+  contract and the Chinese docs described what the code *used to* do -- "used to be", "is gone",
+  "0.3.0 called it", the before/after footprint table with nine historical tool names. A rule whose
+  only justification is "we got it wrong once" teaches the next reader nothing, so each one now states
+  the current consequence. Eight code comments were rewritten the same way: "the old trailing check ran
+  one more probe" became "a trailing check must not be used: it runs one more probe after the
+  deadline".
+- **Four statements no longer matched the code.** `FALLBACK_VERSION` still said 0.3.0 while the
+  package is 0.3.1, so `gopeed_process` reported the wrong plugin version when it could not read the
+  real one; `lib/api.js` still described a silent 9999 fallback port that the code no longer has;
+  `lib/webhook.js` pointed at a function name that does not exist; `docs/GETTING-STARTED.md` was
+  pinned to 0.3.0.
+- **The Chinese README follows the same structure as the English one.** Nine numbered sections and the
+  same eight collapsible blocks, while keeping the deeper material the English landing page does not
+  carry: the twelve-field config table, the settings-form label mapping, the sandbox-versus-plugin
+  table. Its agent hand-off now points at `docs/AGENTS.md`, where it used to point at the English
+  README.
+- **A Design notes section explains the tool shape.** One tool per HTTP endpoint, 1,452 characters in
+  total and about 207 per tool. That is a deliberate deviation from the wider "one tool, many actions"
+  style used elsewhere in the ecosystem, and the section also says where it stops being the right
+  trade.
+
 ### Known limitations
 
 - **The read-only tools still have an unbounded port phase behind the same tool timeout.** `gopeed_list`,

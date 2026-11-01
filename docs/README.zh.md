@@ -18,13 +18,13 @@ REST 类工具跨平台，进程控制仅支持 Windows。
   **`gopeed_process`**（进程 + API 诊断 + 版本 + Webhook 状态）/ **`gopeed_launch`**（只在没跑时启动）/
   **`gopeed_events`**（读下载完成事件；auto 模式下可保存 Webhook 配置）
 - **进 system prompt 的常驻开销只有 1452 字符**（实测：加载 7 个工具定义后按 `{name,description,parameters}` 序列化计长）：7 个工具的「名字 + 一段英文短语描述 + 极简参数」；
-  工具返回的正文同样是英文（工具输出也属于 agent 可见内容）。取舍理由见「七、实测记录」
+  工具返回的正文同样是英文（工具输出也属于 agent 可见内容）。取舍理由见「八、深入细节」中的「实测记录」
 - **下载保存位置可选，不是藏起来的默认值**：`downloadTarget` 三选一——`workspace`（默认，会话的当前工作目录，`cd` 之后跟着变）/
   `gopeed`（交给 Gopeed 自己的下载目录）/ `custom`（用 `customDownloadPath`）。agent 显式传 `path` 时永远以它为准。
   目标目录解析不出来时会回落到 Gopeed 的目录，并在 `gopeed_add` 返回的 `jobNote` 里说明；任务创建后还会回读一次，
   因此返回的 `path` 是**实际落盘目录**，不是把入参原样抄回来
 - **下载完成推送（Webhook）三模式**：`off`（默认，不监听）/ `manual`（插件监听，地址由你手动填进 Gopeed）/
-  `auto`（插件监听，且允许 `gopeed_events action=apply` 把地址保存进 Gopeed 配置）。详见「五」
+  `auto`（插件监听，且允许 `gopeed_events action=apply` 把地址保存进 Gopeed 配置）。详见「八、深入细节」中的「下载完成推送（Webhook）与重启」
 - **下载完成自动唤醒**：`gopeed_add` 会把这次下载注册成 **DSH 后台任务**（`kind: "gopeed"`），
   下载结束时任务 settle，由 DSH 官方 `dsh-tool-jobs` 发出**它自己的**完成通知：agent 忙就下一轮读到，
   agent 空闲就**开新一轮把它唤醒**。通知文字属于 harness，插件不写任何用户身份的消息
@@ -44,106 +44,7 @@ REST 类工具跨平台，进程控制仅支持 Windows。
 
 ---
 
-## 一、目录结构
-
-```
-dsh-gopeed/
-├─ package.json          # bundle 清单：dsh.bundle.patch + dsh.client（Web 端）
-├─ cordis.patch.yml      # 往 profile 组合里插入一行 id=gopeed、name=dsh-gopeed
-├─ index.js              # Host 半：Config + 注册 7 个工具 + Webhook 接收器 + 重启路由
-├─ client.js             # Web 半：配置表单（下载位置/地址/端口/Token/程序路径/Webhook）+ 右下角通知 + 重启按钮
-├─ lib/api.js            # REST 客户端 + 任务归一化 + 进程探测/启动（不 import 任何 DSH 包）
-├─ lib/webhook.js        # 回环 Webhook 接收器 + 50 条环形缓冲（同样不 import DSH）
-├─ locale/{zh,en}.json   # 插件页显示用的标题与说明
-├─ icon.svg
-└─ node_modules/         # ⚠️ 只为本机 link: 安装准备的依赖副本，见「八」
-   └─ @deepseek-ai/{schemastery,cosmokit}
-```
-
-配置项写在 **`index.js` 的 `Config`**（schemastery schema）里，十二个字段全部 `.volatile()`：
-
-| 字段 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `downloadTarget` | enum `workspace` / `gopeed` / `custom` | `workspace` | `gopeed_add` 把文件存到哪里。`workspace` = 会话的当前工作目录（用 `working_directory` 切过目录后就是新目录）；`gopeed` = 不传路径，让 Gopeed 用它在自己设置里配的下载目录；`custom` = 用 `customDownloadPath`。agent 显式传 `path` 时永远优先 |
-| `customDownloadPath` | string | **空** | `downloadTarget` 为 `custom` 时使用的绝对目录，首尾空白会被裁掉。默认空，为空时回落到 Gopeed 自己的目录（配置页在输入框下方常驻说明这一点，placeholder 也写「留空 = Gopeed 默认目录」）；其它 target 下忽略 |
-| `host` | string | `127.0.0.1` | Gopeed 监听地址（Gopeed 设置 → 高级 → 协议（TCP）里的那个地址）。**只填 IP 或主机名**：粘成 `http://…` 或 `127.0.0.1:9999` 会被当场拒绝；裸 IPv6 要写成方括号形式 `[::1]` |
-| `port` | number | `0` | `0` = 自动检测：向 Windows 问出正在运行的 Gopeed 实际占用的端口。填数字才是钉死，且要先去 Gopeed 里把端口改成同一个数（Gopeed 新装是端口 `0`，每次启动随机，所以它没有「默认端口」） |
-| `token` | string | **空** | Gopeed 的 API Token。Gopeed 出厂为空（不鉴权），所以默认留空；你在 Gopeed 里设了什么，这里就填一模一样的。**填错会明确报 `unauthorized`**（Gopeed 回 HTTP 401），不会说成连不上；端口自动检测也会保留它已经找到的那个端口，因此只需要改 Token |
-| `timeoutMs` | number | `20000` | 单次 HTTP 请求超时（毫秒）。**配置页不渲染**，改 profile 的 `cordis.patch.yml` |
-| `exePath` | string | **空** | 可执行文件路径。**一般不用填**：留空时先找 Gopeed 默认安装路径，找不到再自动发现（见「六」）；只有绿色版/非标准安装才需要手填。必须指向真正的 `.exe` 文件，填目录或 `.ini` 之类会被拒绝并回落到自动发现 |
-| `portScan` | boolean | `false` | **配置页不渲染这个开关**。默认关闭；在 profile 配置里打开后，允许插件扫本机动态端口范围来定位 Gopeed（Windows 不肯透露别的进程的端口时用得上）。会碰到无关软件的端口，属于有侵入性的可选项，接受才开 |
-| `webhookMode` | enum `off` / `manual` / `auto` | `off` | 下载完成推送模式。`off` = 不监听任何端口；`manual` = 插件监听并显示地址，由你手动填进 Gopeed；`auto` = 同样监听，另外允许 `gopeed_events action=apply` 把地址保存进 Gopeed 配置。详见「五」 |
-| `webhookPort` | number | `0` | `manual` / `auto` 使用的回环端口，范围 0–65535。`0` = 由系统分配空闲端口（重启后地址会变）；填具体数字才能让地址固定，也才适合「一次填进 Gopeed 长期用」 |
-| `webhookNotify` | boolean | `true` | **配置页没有这个开关**。有监听时，下载完成会给 agent 留一行上下文；`webhookToast` 打开时还会弹右下角 toast。需要 `manual` 或 `auto` 才有事件；**不会**写进对话，也**不会**唤醒空闲的 agent。设为 `false` 则事件只进缓存（需改 profile 配置） |
-| `webhookToast` | boolean | `false` | 弹插件自己的右下角通知。**默认关闭**：Gopeed 自己已经会在 Windows 通知中心弹一条，插件再弹就是重复；想要更详细的信息（名称 / 大小 / 路径）才打开。它只影响给用户看的 toast——job 唤醒、`Agent.inject` 兜底和 `gopeed_events` 事件缓存都不受影响 |
-
-`.volatile()` 是关键：**改完即时生效（不重挂插件、不用重启 DSH）**；但注意，并不是所有 volatile 字段都会被当前这张自定义表单渲染（见下）。
-`token` 还带 `role('secret')`，读取链路里会被抹掉，前端只能看到「已设置 / 未设置」，不会回显明文。
-配置页顶部还有一个版本徽标：如果它低于 `gopeed_process` 返回的 `pluginVersion`，说明浏览器还在用旧前端，需要重启 DSH。
-
-> ⚠️ **三个没有表单控件的字段**：`timeoutMs`、`portScan` 和 `webhookNotify` 在 schema 里存在，但当前配置页**不渲染**它们。
-> 需要改时，在对应 profile 的 `cordis.patch.yml` 里 `id: gopeed` 的 `config` 下直接写（例如 `portScan: true`），
-> 再让配置重新加载 / 重启 DSH。普通用户一般不用动这几项。
-
----
-
-## 二、安装
-
-**不需要命令行、不需要 pnpm、也不需要本机装 Node**，全部用一个 DSH 工具完成：
-
-1. 在任意会话里对 agent 说：「用 plugin_manager 安装这个 bundle，target 填插件目录的绝对路径」
-   （对应 `install_bundle`，例如 `D:\path\to\dsh-plugin-gopeed`）
-2. 重启 DSH
-
-`install_bundle` 的 `target` 还可以填 **git URL**（如 `https://github.com/owner/dsh-gopeed`，
-需要机器上有 `git`，装前会先跑一次 `git ls-remote` 探活）或 **tarball URL**
-（如 `.../archive/refs/tags/v0.1.1.tar.gz`，走压缩包、**不需要 git**）。相对路径会被拒绝，必须是绝对路径。
-
-卸载同理：`plugin_manager` 的 `remove_bundle`，`target` 填 `dsh-gopeed`，然后重启 DSH。
-
-> 为什么强调这个：`pnpm` 是靠全局 Node 装的，换一台没装 Node 的机器就跑不了。
-> `plugin_manager` 是 DSH 自带的能力，机器上只要有 DSH 就能用。
-
-> **一个小技巧**：改完插件源码如果不想重启 DSH，可以调
-> `plugin_manager` 的 `set_plugin`，对 `include:gopeed` 先 `enabled:false` 再 `enabled:true`。
-> 实测这会让插件**重新执行 `apply()`**，工具描述、render 文案这类写在 `apply` 里的改动会立即更新。
-> 但**模块顶层状态不保证重置**（模块级变量、顶层 import 可能保持原样），所以改了 `lib/` 下的模块、
-> 顶层常量或 Config 之外的东西，仍以**重启 DSH** 为准。改了前端 `client.js` 则要刷新浏览器页面。
-
----
-
-## 三、配置项在哪里填
-
-**侧栏「插件」→「已安装」→ `Gopeed 下载器` → 行 `gopeed` → 「配置」**
-
-> ⚠️ **端口的两种走法。** Gopeed 桌面版出厂监听 `127.0.0.1:0`——端口 `0` 表示**每次启动随机分配一个端口**。
-> 插件默认端口也是 `0`，意思是「自己去问 Windows 现在这个 Gopeed 占的是哪个端口」，通常不用配就能通。
-> 如果自动检测拿不到（权限受限，或进程探测不可用），就打开 Gopeed 的 **设置 → 高级 → 协议**，
-> 把地址改成固定值（例如 `127.0.0.1:9999`），再在插件里填同一个端口数字。
-> （1.9.3 的协议选项只有 **TCP** / **Unix socket**，没有 HTTP；也没有「启用 API」开关，API 一直开着。）
-
-| 界面标签 | 字段 | 填什么 |
-|---|---|---|
-| **下载位置** | `downloadTarget` | 三选一：**工作区**（默认，当前工作目录，`cd` 之后跟着变）/ **Gopeed 默认目录** / **自定义**。选「自定义」时下面会多出「自定义路径」输入框（`customDownloadPath`） |
-| **自定义路径** | `customDownloadPath` | 只有选「自定义」时才出现。默认空；留空 = 回落到 Gopeed 自己的目录，填一个绝对目录（例如 `D:\Downloads`）才是真正的自定义路径。输入框下方和 placeholder 都会写明这一点 |
-| **Gopeed 监听地址** | `host` | 默认 `127.0.0.1`，**必填**（留空会被拒绝保存）。**只填 IP 或主机名**，不要带 `http://`，也不要带端口；裸 IPv6 要写成 `[::1]` |
-| **端口** | `port` | 默认 `0` = **自动检测**；留空会被拒绝保存（要自动检测就填 `0`），在 Gopeed 里钉了固定端口时则填**同一个数字**（例如 `9999`） |
-| **Token** | `token` | 默认空 = 不发送 Token（Gopeed 出厂不鉴权）；若你在 Gopeed 里设过 Token，就填一模一样的值（密码框，留空 = 不修改已保存的 Token，这个表单也没有清空入口） |
-| **程序路径（可选）** | `exePath` | 默认空 = 自动查找，插件会自动找到 Gopeed.exe；手填时必须是 `.exe` 文件，不能是目录 |
-| **Webhook 推送（下载完成通知）** | `webhookMode` | 三选一：`off`（默认，不启用）/ `manual`（手动配置）/ `auto`（自动配置）。整块收在一个**默认折叠的抽屉**里，摘要行显示当前模式 |
-| **Webhook 监听端口** | `webhookPort` | 默认 `0` = 系统分配空闲端口（每次可能不同），留空会被拒绝保存；想让地址固定下来、方便一次填进 Gopeed，就填一个具体数字（例如随机生成的 2 万多端口）。只在 `manual` 模式下显示 |
-| （表单无此控件） | `webhookNotify` | 默认开，但配置页上**没有开关**；要关闭只能改 profile 配置。它控制下载完成时给 agent 留不留上下文（toast 另有 `webhookToast`） |
-| （同属 Webhook 区块） | `webhookToast` | 默认关：打开后才会弹插件自己的右下角通知。只影响给人看的 toast，不影响 job 唤醒 |
-
-Token 框留空就不会写回，旧 Token 保持有效。上方有实时的 `当前请求地址 http://host:port` 预览。
-点保存立即生效。写入位置是 `profiles/web/cordis.patch.yml` 里 `id: gopeed` 的 `config`。
-
-> 用户可见文案里不出现「API」字样：字段叫「Gopeed 监听地址 / 端口 / Token」，Token 的提示只说「放在请求头里」。
-> 它们对应配置里的 `host` / `port` / `token`，只是说法对人更友好。
-
----
-
-## 四、工具一览
+## 一、它能做什么
 
 | 工具 | 参数 | 返回 | 说明 |
 |---|---|---|---|
@@ -168,7 +69,133 @@ Token 框留空就不会写回，旧 Token 保持有效。上方有实时的 `�
   "speedBytesPerSec":1048576, "path":"D:\\Downloads", "createdAt":"…" }
 ```
 
-### 下载保存到哪里
+---
+
+## 二、它不能做什么
+
+- **没有任何工具能重启或杀掉 Gopeed。** 重启是配置页上那个红色的「重启 Gopeed」按钮，属于用户操作，
+  因为它会中断正在进行的下载；`gopeed_launch` 只在 Gopeed 没跑时把进程拉起来，而且没有参数。
+- **进程控制仅限 Windows。** `gopeed_process`、`gopeed_launch`、重启按钮和可执行文件自动发现都调用 Windows
+  自带的命令；下载类工具在任何能跑 Gopeed 的地方都能用。
+- **Webhook 监听只绑 `127.0.0.1`。** Gopeed 跑在 Docker 里或另一台机器上时，不做额外网络映射就推不过来；
+  这种情况改用 `gopeed_list` / `gopeed_status` 轮询。
+- **插件从不往对话里写消息。** 没有 user 角色的消息，也不会伪造追问；引导文字只出现在工具自己的返回里。
+
+---
+
+## 三、前置条件
+
+- **DSH 正在运行**，且当前 profile 能安装 bundle（`plugin_manager` 工具，或 Web 端「插件」页）。
+- **Gopeed 1.9.3 或更新版本**，在 `host:port` 上可达（实测于 1.9.3）。
+- **不需要本机装 Node.js / npm / pnpm**：插件是跑在 DSH 主进程里的 Cordis 插件，全程不调用包管理器。
+- **Windows PowerShell 5.1 就够**：进程相关的辅助命令只用 `tasklist` / `taskkill` / `powershell.exe` / `netstat` / `netsh`。
+
+---
+
+## 四、安装
+
+**不需要命令行、不需要 pnpm、也不需要本机装 Node**，全部用一个 DSH 工具完成：
+
+1. 在任意会话里对 agent 说：「用 plugin_manager 安装这个 bundle，target 填插件目录的绝对路径」
+   （对应 `install_bundle`，例如 `D:\path\to\dsh-plugin-gopeed`）
+2. 重启 DSH
+
+<details>
+<summary>安装 target 支持的三类形式、卸载，以及不重启 DSH 的小技巧</summary>
+
+`install_bundle` 的 `target` 还可以填 **git URL**（如 `https://github.com/owner/dsh-gopeed`，
+需要机器上有 `git`，装前会先跑一次 `git ls-remote` 探活）或 **tarball URL**
+（如 `.../archive/refs/tags/v0.1.1.tar.gz`，走压缩包、**不需要 git**）。相对路径会被拒绝，必须是绝对路径。
+
+卸载同理：`plugin_manager` 的 `remove_bundle`，`target` 填 `dsh-gopeed`，然后重启 DSH。
+
+> 为什么强调这个：`pnpm` 是靠全局 Node 装的，换一台没装 Node 的机器就跑不了。
+> `plugin_manager` 是 DSH 自带的能力，机器上只要有 DSH 就能用。
+
+> **一个小技巧**：改完插件源码如果不想重启 DSH，可以调
+> `plugin_manager` 的 `set_plugin`，对 `include:gopeed` 先 `enabled:false` 再 `enabled:true`。
+> 实测这会让插件**重新执行 `apply()`**，工具描述、render 文案这类写在 `apply` 里的改动会立即更新。
+> 但**模块顶层状态不保证重置**（模块级变量、顶层 import 可能保持原样），所以改了 `lib/` 下的模块、
+> 顶层常量或 Config 之外的东西，仍以**重启 DSH** 为准。改了前端 `client.js` 则要刷新浏览器页面。
+
+</details>
+
+---
+
+## 五、配置
+
+**侧栏「插件」→「已安装」→ `Gopeed 下载器` → 行 `gopeed` → 「配置」**
+
+<details>
+<summary>为什么没有「默认端口」这个值，这些默认值又是从哪来的</summary>
+
+> ⚠️ **端口的两种走法。** Gopeed 桌面版出厂监听 `127.0.0.1:0`——端口 `0` 表示**每次启动随机分配一个端口**。
+> 插件默认端口也是 `0`，意思是「自己去问 Windows 现在这个 Gopeed 占的是哪个端口」，通常不用配就能通。
+> 如果自动检测拿不到（权限受限，或进程探测不可用），就打开 Gopeed 的 **设置 → 高级 → 协议**，
+> 把地址改成固定值（例如 `127.0.0.1:9999`），再在插件里填同一个端口数字。
+> （1.9.3 的协议选项只有 **TCP** / **Unix socket**，没有 HTTP；也没有「启用 API」开关，API 一直开着。）
+
+</details>
+
+| 界面标签 | 字段 | 填什么 |
+|---|---|---|
+| **下载位置** | `downloadTarget` | 三选一：**工作区**（默认，当前工作目录，`cd` 之后跟着变）/ **Gopeed 默认目录** / **自定义**。选「自定义」时下面会多出「自定义路径」输入框（`customDownloadPath`） |
+| **自定义路径** | `customDownloadPath` | 只有选「自定义」时才出现。默认空；留空 = 回落到 Gopeed 自己的目录，填一个绝对目录（例如 `D:\Downloads`）才是真正的自定义路径。输入框下方和 placeholder 都会写明这一点 |
+| **Gopeed 监听地址** | `host` | 默认 `127.0.0.1`，**必填**（留空会被拒绝保存）。**只填 IP 或主机名**，不要带 `http://`，也不要带端口；裸 IPv6 要写成 `[::1]` |
+| **端口** | `port` | 默认 `0` = **自动检测**；留空会被拒绝保存（要自动检测就填 `0`），在 Gopeed 里钉了固定端口时则填**同一个数字**（例如 `9999`） |
+| **Token** | `token` | 默认空 = 不发送 Token（Gopeed 出厂不鉴权）；若你在 Gopeed 里设过 Token，就填一模一样的值（密码框，留空 = 不修改已保存的 Token，这个表单也没有清空入口） |
+| **程序路径（可选）** | `exePath` | 默认空 = 自动查找，插件会自动找到 Gopeed.exe；手填时必须是 `.exe` 文件，不能是目录 |
+| **Webhook 推送（下载完成通知）** | `webhookMode` | 三选一：`off`（默认，不启用）/ `manual`（手动配置）/ `auto`（自动配置）。整块收在一个**默认折叠的抽屉**里，摘要行显示当前模式 |
+| **Webhook 监听端口** | `webhookPort` | 默认 `0` = 系统分配空闲端口（每次可能不同），留空会被拒绝保存；想让地址固定下来、方便一次填进 Gopeed，就填一个具体数字（例如随机生成的 2 万多端口）。只在 `manual` 模式下显示 |
+| （表单无此控件） | `webhookNotify` | 默认开，但配置页上**没有开关**；要关闭只能改 profile 配置。它控制下载完成时给 agent 留不留上下文（toast 另有 `webhookToast`） |
+| （同属 Webhook 区块） | `webhookToast` | 默认关：打开后才会弹插件自己的右下角通知。只影响给人看的 toast，不影响 job 唤醒 |
+
+Token 框留空就不会写回，旧 Token 保持有效。上方有实时的 `当前请求地址 http://host:port` 预览。
+点保存立即生效。写入位置是 `profiles/web/cordis.patch.yml` 里 `id: gopeed` 的 `config`。
+
+> 用户可见文案里不出现「API」字样：字段叫「Gopeed 监听地址 / 端口 / Token」，Token 的提示只说「放在请求头里」。
+> 它们对应配置里的 `host` / `port` / `token`，只是说法对人更友好。
+
+---
+
+---
+
+## 六、已知限制 / 没确认的部分
+
+1. **强制重启会中断正在进行的下载**，所以它只做成配置页上的用户按钮，不开放给任何工具。
+   失败路径会按阶段报告（`probe` / `not-running` / `executable` / `stop` / `launch` / `api`）；
+   成功路径也不承诺保住下载进度。
+2. **Webhook 能否送达，取决于 Gopeed 是否在完全重启后应用了配置。** 在那之前 GUI 可能显示旧值，
+   事件一条也不会来；插件无法区分「Gopeed 里没开」和「开了但没重启」，两者看起来都是零事件。
+3. **事件只在内存里**：环形缓冲 50 条，插件重载或 DSH 重启即清空，不落盘。
+4. **配置页的视觉排版没截图确认**：数据链路（slot key、`form.state/mutate`、字段投影、token 脱敏）都验过，
+   但样式只是内联 CSS，没在浏览器里看过实际效果。
+5. **BT / 磁力任务只做了浅测**：用一个 Debian 13.7 netinst ISO 的官方磁力链接端到端验证过——metadata 解析出 756 MB、开始下载约 4 MB/s、跟踪 job 正常。更少见的场景（没有 peers、只靠 DHT、私有 tracker、重启后继续磁力任务）仍未验证。`meta.res` 缺失时会降级为 `sizeKnown=false`，而不是编一个百分比。
+6. **`gopeed_control` 的 `remove` 是幂等的**：Gopeed 1.9.3 对不存在的 id 执行 `DELETE` 也回成功，所以重复删除显示「已删除」。
+7. **重启后「已就绪」是轮询 API 判断的**，如果 Gopeed 在加载界面时 API 已通，会提前报就绪（不影响使用）。
+8. **Webhook 监听只绑回环**：Gopeed 跑在 Docker 里或另一台机器上时，不额外做网络映射就推不过来。
+9. **下载跟踪不能跨 DSH 重启存活**：跟踪任务是 DSH 进程内的后台任务，DSH 重启（或插件升级）就全丢了；
+   下载本身继续在 Gopeed 里进行，`gopeed_status` 仍能看到。没有持久化、也没有「重新接管」——那需要可持久化的
+   job 后端，超出本插件的范围。插件重载至少会如实报告：每个还活着的跟踪器 settle 成 `killed`，detail 写明
+   下载状态未知。
+10. **只读工具仍可能被自己的超时掐断。** `gopeed_list` / `gopeed_status` / `gopeed_control`（工具超时 25 秒）
+    和 `gopeed_process`（30 秒）仍然无条件调用端口探测、没有内部时间预算，所以 Gopeed 冷启动时它们同样可能
+    撞上 DSH 的工具超时，调用被直接掐断、连一句解释都返回不了。只有写操作 `gopeed_add` 带内部时间预算：工具超时 25 秒、内部预算 22.5 秒（端口探测硬上限 12 秒），
+    22.5 秒 < 25 秒，所以它能在被 DSH 掐断前返回（被掐断的写操作会留下一次没人认领的下载，代价更高）；
+    只读工具失败重试很便宜，暂时不做。
+
+---
+
+## 七、设计取舍
+
+**一个端点一个工具，是刻意的。** 七个工具与 Gopeed 的 HTTP 端点一一对应，而不是共用一个带 `action` 枚举的调度器。这与 DSH 生态里更重的风格不同——那边一个工具（如 `skill` 或 `bash`）常常覆盖一整个能力面。实测代价是七个定义合计 **1452 字符**、平均 **207 字符/工具**，是本机量过的插件里每工具开销最低的，所以这个形状换来的是清晰，而模型并没有为它多付钱。这个插件是套在一个下载器外面的薄适配层，不是框架：只做一件事，把上下文成本压在地板上。
+
+**什么时候它不再划算。** 端点少的时候，一个端点一个工具才便宜。加到第九、第十个工具时，调度器反而是更好的交易——上面提的 1100 字符目标就是该盯的那条线。
+
+## 八、深入细节（Going deeper）
+
+<details>
+<summary>下载保存到哪里，以及归一化后的任务结构</summary>
 
 保存目录按下面的顺序决定，命中即停：
 
@@ -187,9 +214,10 @@ Token 框留空就不会写回，旧 Token 保持有效。上方有实时的 `�
 所以返回里的 `path` 是文件真正落盘的位置，而不是把调用方的入参（可能为空）原样抄回去。这次回读是尽力而为——
 读失败不会把 Gopeed 已经接受的任务判成失败。
 
----
+</details>
 
-## 五、下载完成推送（Webhook）与重启
+<details>
+<summary>下载完成推送（Webhook）与重启：深入</summary>
 
 Gopeed 在任务**完成或失败**时会主动 **POST** 一个事件（`DOWNLOAD_DONE` / `DOWNLOAD_ERROR`）到 Webhook 地址。
 这是**推送**，不是插件轮询——插件不会去猜「下载好了没有」。
@@ -287,7 +315,10 @@ Webhook 整块在配置页里收进一个**默认折叠的抽屉**，摘要行�
 下载通知只走上面三条通道，而「唤醒」这一条是 DSH 官方的，不是插件伪造的。把 `webhookNotify` 设为 `false`，
 Webhook 事件就只进缓存（第 1 条不受影响）。
 
-### 下载完成自动唤醒（DSH 后台任务）
+</details>
+
+<details>
+<summary>下载完成自动唤醒（DSH 后台任务）</summary>
 
 拿 `gopeed_status` 一轮一轮查进度是错的做法：每查一次烧一步，文件真下完时 agent 也没有可回应的东西。
 所以 `gopeed_add` 同时把这次下载注册成 **DSH 后台任务**（`kind: "gopeed"`，id 形如 `gopeed-<16 位十六进制>`），
@@ -321,11 +352,12 @@ download NOT cancelled」结束——`failed` 只留给 API 连不上或 Gopeed 
   下载状态未知、Gopeed 里的任务可能还在下」。这样措辞是因为插件确实再也看不到这次下载了，而 DSH 的结果词汇里
   没有「未知」这个状态，detail 是唯一诚实的位置。
 - **DSH 重启会彻底丢失跟踪**：后台任务活在 DSH 进程里。下载本身继续在 Gopeed 里跑，`gopeed_status` 依旧看得到。
-  见「九、已知限制」。
+  见「六、已知限制」。
 
----
+</details>
 
-## 六、Gopeed 卡了怎么办
+<details>
+<summary>Gopeed 卡了怎么办：诊断结论、启动与沙箱</summary>
 
 先让 agent 跑 **`gopeed_process`**，它给六种结论：
 
@@ -389,9 +421,10 @@ gopeed_launch    # 没在跑就启动；在跑就什么都不做
 - **它不会重启任何东西。** 没有 `restart` 参数了；进程卡死请引导用户去配置页点「重启 Gopeed」。
 - **拿不到 pid 时不会假装成功**：重启路径会明确告诉你「重启需要 pid，但当前环境查不到进程列表」，并给出人工步骤。
 
----
+</details>
 
-## 七、实测记录
+<details>
+<summary>实测记录：实测通过项、1452 字符的常驻开销与那个沙箱坑</summary>
 
 ### 已实测通过
 
@@ -477,9 +510,53 @@ explains it)` 结尾（Gopeed 回 HTTP 401，`code=1001 msg=unauthorized`）。�
 `downloadTarget/customDownloadPath/host/port/token/timeoutMs/exePath/portScan/webhookMode/webhookPort/webhookNotify/webhookToast`（全部 volatile），
 `token` 被标记为 `{"path":["token"],"set":true}` 且不出现在表单值里。
 
----
+</details>
 
-## 八、关于 `node_modules/`
+<details>
+<summary>开发：目录结构、`node_modules/` 与测试</summary>
+
+### 目录结构
+
+```
+dsh-gopeed/
+├─ package.json          # bundle 清单：dsh.bundle.patch + dsh.client（Web 端）
+├─ cordis.patch.yml      # 往 profile 组合里插入一行 id=gopeed、name=dsh-gopeed
+├─ index.js              # Host 半：Config + 注册 7 个工具 + Webhook 接收器 + 重启路由
+├─ client.js             # Web 半：配置表单（下载位置/地址/端口/Token/程序路径/Webhook）+ 右下角通知 + 重启按钮
+├─ lib/api.js            # REST 客户端 + 任务归一化 + 进程探测/启动（不 import 任何 DSH 包）
+├─ lib/webhook.js        # 回环 Webhook 接收器 + 50 条环形缓冲（同样不 import DSH）
+├─ locale/{zh,en}.json   # 插件页显示用的标题与说明
+├─ icon.svg
+└─ node_modules/         # ⚠️ 只为本机 link: 安装准备的依赖副本，见「八、深入细节」中的「开发」
+   └─ @deepseek-ai/{schemastery,cosmokit}
+```
+
+配置项写在 **`index.js` 的 `Config`**（schemastery schema）里，十二个字段全部 `.volatile()`：
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `downloadTarget` | enum `workspace` / `gopeed` / `custom` | `workspace` | `gopeed_add` 把文件存到哪里。`workspace` = 会话的当前工作目录（用 `working_directory` 切过目录后就是新目录）；`gopeed` = 不传路径，让 Gopeed 用它在自己设置里配的下载目录；`custom` = 用 `customDownloadPath`。agent 显式传 `path` 时永远优先 |
+| `customDownloadPath` | string | **空** | `downloadTarget` 为 `custom` 时使用的绝对目录，首尾空白会被裁掉。默认空，为空时回落到 Gopeed 自己的目录（配置页在输入框下方常驻说明这一点，placeholder 也写「留空 = Gopeed 默认目录」）；其它 target 下忽略 |
+| `host` | string | `127.0.0.1` | Gopeed 监听地址（Gopeed 设置 → 高级 → 协议（TCP）里的那个地址）。**只填 IP 或主机名**：粘成 `http://…` 或 `127.0.0.1:9999` 会被当场拒绝；裸 IPv6 要写成方括号形式 `[::1]` |
+| `port` | number | `0` | `0` = 自动检测：向 Windows 问出正在运行的 Gopeed 实际占用的端口。填数字才是钉死，且要先去 Gopeed 里把端口改成同一个数（Gopeed 新装是端口 `0`，每次启动随机，所以它没有「默认端口」） |
+| `token` | string | **空** | Gopeed 的 API Token。Gopeed 出厂为空（不鉴权），所以默认留空；你在 Gopeed 里设了什么，这里就填一模一样的。**填错会明确报 `unauthorized`**（Gopeed 回 HTTP 401），不会说成连不上；端口自动检测也会保留它已经找到的那个端口，因此只需要改 Token |
+| `timeoutMs` | number | `20000` | 单次 HTTP 请求超时（毫秒）。**配置页不渲染**，改 profile 的 `cordis.patch.yml` |
+| `exePath` | string | **空** | 可执行文件路径。**一般不用填**：留空时先找 Gopeed 默认安装路径，找不到再自动发现（见「八、深入细节」中的「Gopeed 卡了怎么办」）；只有绿色版/非标准安装才需要手填。必须指向真正的 `.exe` 文件，填目录或 `.ini` 之类会被拒绝并回落到自动发现 |
+| `portScan` | boolean | `false` | **配置页不渲染这个开关**。默认关闭；在 profile 配置里打开后，允许插件扫本机动态端口范围来定位 Gopeed（Windows 不肯透露别的进程的端口时用得上）。会碰到无关软件的端口，属于有侵入性的可选项，接受才开 |
+| `webhookMode` | enum `off` / `manual` / `auto` | `off` | 下载完成推送模式。`off` = 不监听任何端口；`manual` = 插件监听并显示地址，由你手动填进 Gopeed；`auto` = 同样监听，另外允许 `gopeed_events action=apply` 把地址保存进 Gopeed 配置。详见「八、深入细节」中的「下载完成推送（Webhook）与重启」 |
+| `webhookPort` | number | `0` | `manual` / `auto` 使用的回环端口，范围 0–65535。`0` = 由系统分配空闲端口（重启后地址会变）；填具体数字才能让地址固定，也才适合「一次填进 Gopeed 长期用」 |
+| `webhookNotify` | boolean | `true` | **配置页没有这个开关**。有监听时，下载完成会给 agent 留一行上下文；`webhookToast` 打开时还会弹右下角 toast。需要 `manual` 或 `auto` 才有事件；**不会**写进对话，也**不会**唤醒空闲的 agent。设为 `false` 则事件只进缓存（需改 profile 配置） |
+| `webhookToast` | boolean | `false` | 弹插件自己的右下角通知。**默认关闭**：Gopeed 自己已经会在 Windows 通知中心弹一条，插件再弹就是重复；想要更详细的信息（名称 / 大小 / 路径）才打开。它只影响给用户看的 toast——job 唤醒、`Agent.inject` 兜底和 `gopeed_events` 事件缓存都不受影响 |
+
+`.volatile()` 是关键：**改完即时生效（不重挂插件、不用重启 DSH）**；但注意，并不是所有 volatile 字段都会被当前这张自定义表单渲染（见下）。
+`token` 还带 `role('secret')`，读取链路里会被抹掉，前端只能看到「已设置 / 未设置」，不会回显明文。
+配置页顶部还有一个版本徽标：如果它低于 `gopeed_process` 返回的 `pluginVersion`，说明浏览器还在用旧前端，需要重启 DSH。
+
+> ⚠️ **三个没有表单控件的字段**：`timeoutMs`、`portScan` 和 `webhookNotify` 在 schema 里存在，但当前配置页**不渲染**它们。
+> 需要改时，在对应 profile 的 `cordis.patch.yml` 里 `id: gopeed` 的 `config` 下直接写（例如 `portScan: true`），
+> 再让配置重新加载 / 重启 DSH。普通用户一般不用动这几项。
+
+### 关于 `node_modules/`
 
 `@deepseek-ai/schemastery` 与 `@deepseek-ai/cosmokit` 按 `peerDependencies` 声明。
 用 `link:` 方式安装时，Node 解析裸模块名看的是插件**真实路径**（即插件目录本身，通常在 profile 之外），
@@ -494,35 +571,11 @@ explains it)` 结尾（Gopeed 回 HTTP 401，`code=1001 msg=unauthorized`）。�
 
 若改成从 npm 正式安装，删掉这个 `node_modules/` 即可。
 
----
-
-## 九、已知限制 / 没确认的部分
-
-1. **强制重启会中断正在进行的下载**，所以它只做成配置页上的用户按钮，不开放给任何工具。
-   失败路径会按阶段报告（`probe` / `not-running` / `executable` / `stop` / `launch` / `api`）；
-   成功路径也不承诺保住下载进度。
-2. **Webhook 能否送达，取决于 Gopeed 是否在完全重启后应用了配置。** 在那之前 GUI 可能显示旧值，
-   事件一条也不会来；插件无法区分「Gopeed 里没开」和「开了但没重启」，两者看起来都是零事件。
-3. **事件只在内存里**：环形缓冲 50 条，插件重载或 DSH 重启即清空，不落盘。
-4. **配置页的视觉排版没截图确认**：数据链路（slot key、`form.state/mutate`、字段投影、token 脱敏）都验过，
-   但样式只是内联 CSS，没在浏览器里看过实际效果。
-5. **BT / 磁力任务只做了浅测**：用一个 Debian 13.7 netinst ISO 的官方磁力链接端到端验证过——metadata 解析出 756 MB、开始下载约 4 MB/s、跟踪 job 正常。更少见的场景（没有 peers、只靠 DHT、私有 tracker、重启后继续磁力任务）仍未验证。`meta.res` 缺失时会降级为 `sizeKnown=false`，而不是编一个百分比。
-6. **`gopeed_control` 的 `remove` 是幂等的**：Gopeed 1.9.3 对不存在的 id 执行 `DELETE` 也回成功，所以重复删除显示「已删除」。
-7. **重启后「已就绪」是轮询 API 判断的**，如果 Gopeed 在加载界面时 API 已通，会提前报就绪（不影响使用）。
-8. **Webhook 监听只绑回环**：Gopeed 跑在 Docker 里或另一台机器上时，不额外做网络映射就推不过来。
-9. **下载跟踪不能跨 DSH 重启存活**：跟踪任务是 DSH 进程内的后台任务，DSH 重启（或插件升级）就全丢了；
-   下载本身继续在 Gopeed 里进行，`gopeed_status` 仍能看到。没有持久化、也没有「重新接管」——那需要可持久化的
-   job 后端，超出本插件的范围。插件重载至少会如实报告：每个还活着的跟踪器 settle 成 `killed`，detail 写明
-   下载状态未知。
-10. **只读工具仍可能被自己的超时掐断。** `gopeed_list` / `gopeed_status` / `gopeed_control`（工具超时 25 秒）
-    和 `gopeed_process`（30 秒）仍然无条件调用端口探测、没有内部时间预算，所以 Gopeed 冷启动时它们同样可能
-    撞上 DSH 的工具超时，调用被直接掐断、连一句解释都返回不了。只有写操作 `gopeed_add` 带内部时间预算：工具超时 25 秒、内部预算 22.5 秒（端口探测硬上限 12 秒），
-    22.5 秒 < 25 秒，所以它能在被 DSH 掐断前返回（被掐断的写操作会留下一次没人认领的下载，代价更高）；
-    只读工具失败重试很便宜，暂时不做。
+</details>
 
 ---
 
-## 十、文档
+## 九、文档
 
 - **[docs/AGENTS.md](AGENTS.md)** -- **agent 契约；请把 agent 指向这里，而不是本 README。** 工具表（含 DSH 校验的返回字段）、
   不许轮询的规则、保存位置顺序、按 `verdict` 索引的错误手册，以及明确的禁止清单。
@@ -534,7 +587,9 @@ explains it)` 结尾（Gopeed 回 HTTP 401，`code=1001 msg=unauthorized`）。�
 > `docs/` **不在 `files` 里**，所以装好的插件目录里只有根 `README.md`、`CHANGELOG.md` 和许可证，没有这份中文文档和其他
 > `docs/` 内容；中文文档只在 GitHub 上可读。没有构建步骤：发布的就是源码。
 
-## 十一、致谢与非官方声明
+---
+
+## 十、致谢与非官方声明
 
 本插件是一个**独立的、非官方的**集成。它通过 REST API 与本地运行的
 [Gopeed](https://github.com/GopeedLab/gopeed)（一个支持 HTTP / BitTorrent / 磁力 / ed2k 的现代下载器）通信，
