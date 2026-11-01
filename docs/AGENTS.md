@@ -76,7 +76,7 @@ First match wins:
 4. otherwise the path is left unset and **Gopeed's own configured download directory** is used.
 
 **"Current" means live, not creation time:** this is the directory the `working_directory` tool reports, so it
-follows a `cd`. The directory the session was created in is no longer used for this.
+follows a `cd`; creation time plays no part.
 
 Fallbacks are reported in `jobNote` and never happen silently. The returned `path` is read back from Gopeed, so
 it is where the file actually landed -- quote it to the user rather than repeating your own argument.

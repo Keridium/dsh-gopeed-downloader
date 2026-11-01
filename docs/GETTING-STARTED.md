@@ -246,4 +246,4 @@ Token 就是一把「暗号」，Gopeed 和插件两边必须完全一样。**Go
 
 只需要两样东西：能打开网页、能对话的 **DSH**，以及装好的 **Gopeed**。不需要安装 Node.js 或任何包管理器，不需要使用命令行，也不需要手动改任何配置文件。插件由 DSH 自己运行，真正负责下载的是 Gopeed。唯一要记住的，是「Gopeed 里的端口」和「插件里的端口」必须是同一个数——Token 不设也没关系（两边都空 = 不鉴权）。
 
-> 说明：本文按 **0.3.0** 的界面和工具名编写（`gopeed_add`、`gopeed_list`、`gopeed_status`、`gopeed_control`、`gopeed_process`、`gopeed_launch`、`gopeed_events`）。暂停 / 继续 / 删除都走 `gopeed_control`，用 `action` 指定 `pause` / `resume` / `remove`；连通性、版本与 Webhook 状态检查走 `gopeed_process`；下载事件与 Webhook 配置保存走 `gopeed_events`。下载保存位置由配置页的「下载位置」（`downloadTarget`）决定，agent 显式传 `path` 时优先用它的路径。工具名和界面细节以后续版本的 README 为准。
+> 说明：本文按 **0.3.x** 的界面和工具名编写（`gopeed_add`、`gopeed_list`、`gopeed_status`、`gopeed_control`、`gopeed_process`、`gopeed_launch`、`gopeed_events`）。暂停 / 继续 / 删除都走 `gopeed_control`，用 `action` 指定 `pause` / `resume` / `remove`；连通性、版本与 Webhook 状态检查走 `gopeed_process`；下载事件与 Webhook 配置保存走 `gopeed_events`。下载保存位置由配置页的「下载位置」（`downloadTarget`）决定，agent 显式传 `path` 时优先用它的路径。工具名和界面细节以后续版本的 README 为准。

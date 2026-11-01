@@ -18,7 +18,7 @@ REST 类工具跨平台，进程控制仅支持 Windows。
   **`gopeed_process`**（进程 + API 诊断 + 版本 + Webhook 状态）/ **`gopeed_launch`**（只在没跑时启动）/
   **`gopeed_events`**（读下载完成事件；auto 模式下可保存 Webhook 配置）
 - **进 system prompt 的常驻开销只有 1452 字符**（约 363 token，按 4 字符/token 粗略折算）：7 个工具的「名字 + 一段英文短语描述 + 极简参数」；
-  工具返回的正文同样是英文（工具输出也属于 agent 可见内容）。合并与精简过程见「七、实测记录」
+  工具返回的正文同样是英文（工具输出也属于 agent 可见内容）。取舍理由见「七、实测记录」
 - **下载保存位置可选，不是藏起来的默认值**：`downloadTarget` 三选一——`workspace`（默认，会话的当前工作目录，`cd` 之后跟着变）/
   `gopeed`（交给 Gopeed 自己的下载目录）/ `custom`（用 `customDownloadPath`）。agent 显式传 `path` 时永远以它为准。
   目标目录解析不出来时会回落到 Gopeed 的目录，并在 `gopeed_add` 返回的 `jobNote` 里说明；任务创建后还会回读一次，
@@ -29,8 +29,8 @@ REST 类工具跨平台，进程控制仅支持 Windows。
   下载结束时任务 settle，由 DSH 官方 `dsh-tool-jobs` 发出**它自己的**完成通知：agent 忙就下一轮读到，
   agent 空闲就**开新一轮把它唤醒**。通知文字属于 harness，插件不写任何用户身份的消息
 - **通知不进对话**：右下角 toast（6 秒自动消失）+ `Agent.inject`（只进下一轮模型上下文，**不唤醒 agent**，
-  现在只作为「没有后台任务覆盖」时的降级通道）。插件**不会**再往对话里发消息：
-  旧的 `followup` / `deferContext` 已移除，那种做法会冒充用户发言
+  现在只作为「没有后台任务覆盖」时的降级通道）。插件**不会**往对话里发消息：
+  向对话注入消息只能以用户身份出现，会冒充用户发言
 - **工具自己会找人**：检测到 Gopeed 没装/没配好时，会直接把英文分步说明写进**本次工具输出**（错误信息或
   `gopeed_process.advice`），不依赖用户去翻文档，也只发一次；它不是聊天消息
 - 只走回环（端口**默认自动检测**：向 Windows 询问正在运行的 Gopeed 实际占用的端口；Gopeed 桌面版出厂是
@@ -138,8 +138,8 @@ dsh-gopeed/
 Token 框留空就不会写回，旧 Token 保持有效。上方有实时的 `当前请求地址 http://host:port` 预览。
 点保存立即生效。写入位置是 `profiles/web/cordis.patch.yml` 里 `id: gopeed` 的 `config`。
 
-> 用户可见文案里不再出现「API」字样：字段叫「Gopeed 监听地址 / 端口 / Token」，Token 的提示只说「放在请求头里」。
-> 它们仍然对应原来的 `host` / `port` / `token`，只是说法对人更友好。
+> 用户可见文案里不出现「API」字样：字段叫「Gopeed 监听地址 / 端口 / Token」，Token 的提示只说「放在请求头里」。
+> 它们对应配置里的 `host` / `port` / `token`，只是说法对人更友好。
 
 ---
 
@@ -158,7 +158,7 @@ Token 框留空就不会写回，旧 Token 保持有效。上方有实时的 `�
 > `gopeed_control` 的 `force` **默认 `true`**：直接删会连已下载的文件一起删；
 > 想保留文件要显式传 `force: false`。
 
-> `action` 只接受 `apply`。任何别的值（包括旧版本里那种「应用并重启」的组合词）都会被明确拒绝并说明原因——**没有哪个工具能重启或杀 Gopeed**。
+> `action` 只接受 `apply`。任何别的值都会被明确拒绝并说明原因——**没有哪个工具能重启或杀 Gopeed**。
 
 任务对象是归一化后的扁平结构：
 
@@ -244,8 +244,8 @@ GUI 里也可能一直显示旧值，所以「设置页看起来没变」并不�
 按钮是红色、点击前有二次确认（会中断正在进行的下载）。
 
 **为什么必须强制杀**：`taskkill` 不带 `/F` 只是「请求关闭」，Gopeed 收到后的反应是**最小化到托盘**——进程根本没死，
-命令却返回成功。旧版本因此出现过「报告重启成功、实际什么都没重启」的假阳性。现在不带 `/F` 的软关闭不再使用，
-并且以 pid 消失为唯一成功标准。
+命令却返回成功，于是「报告重启成功、实际什么都没重启」。因此不带 `/F` 的软关闭不用，
+成功标准只有 pid 消失。
 
 **任何 agent 工具都不能重启或杀进程**：`gopeed_launch` 没有 `restart` 参数，`gopeed_events` 只接受 `apply`。
 这是故意的——杀下载器应该是用户的手动决定。
@@ -282,8 +282,8 @@ GUI 里也可能一直显示旧值，所以「设置页看起来没变」并不�
 Webhook 整块在配置页里收进一个**默认折叠的抽屉**，摘要行显示当前模式；抽屉外常驻一段职责说明：
 「下载完成自动唤醒」由 DSH 后台任务负责，**不依赖 webhook**，webhook 只是可选增强。
 
-**插件不再往对话里发消息。** 旧的 `Agent.followup` 和 `ToolRunContext.deferContext` 都已移除：两者都会以
-`role: 'user'` 的身份把插件文字送进会话，看起来就像用户自己说的。现在引导文字只出现在**工具自己的输出**里，
+**插件不往对话里发消息。** 往会话里发消息只能以 `role: 'user'` 的身份出现，看起来就像用户自己说的，
+所以引导文字只出现在**工具自己的输出**里，
 下载通知只走上面三条通道，而「唤醒」这一条是 DSH 官方的，不是插件伪造的。把 `webhookNotify` 设为 `false`，
 Webhook 事件就只进缓存（第 1 条不受影响）。
 
@@ -338,7 +338,7 @@ download NOT cancelled」结束——`failed` 只留给 API 连不上或 Gopeed 
 | `unauthorized` | 进程好的，Token 不对（Gopeed 回 HTTP 401；端口自动检测照样认得这个端口，所以不是端口问题） | 去配置页改 Token |
 | `unknown` | 端口/地址不对，**或进程表读不出来** | 检查地址、端口、Gopeed 的协议设置；`processProbe` 为 `unavailable` 时不要当成 `stopped` |
 
-`misconfigured` 是为了修掉过去的误判：进程明明在跑、只是端口对不上时，报 `stopped` 会让你去启动一个已经启动的程序。
+`misconfigured` 避免的是一类误判：进程明明在跑、只是端口对不上时，报 `stopped` 会让你去启动一个已经启动的程序。
 它只在**进程探测确实能看到进程**时才会出现；探测被环境挡住时，结论仍以 API 证据为准。
 
 **端口自动检测与 `portScan`**：端口填 `0` 时，插件先向 Windows 问「这个 `Gopeed.exe` 占用了哪些端口」
@@ -347,8 +347,8 @@ download NOT cancelled」结束——`failed` 只留给 API 连不上或 Gopeed 
 因为它会连到与本插件无关的软件端口，属于**有侵入性的可选项**，默认不开。**检测失败时插件不会去猜一个端口**：
 它如实报告端口未知，并请你在 Gopeed 里查到那个端口填进来。
 
-> 0.2.0 修掉了一个会让「端口未知」永远不可达的 bug：旧代码 `Number(port) || 9999` 会把 `0` 当成假值变成 `9999`，
-> 于是自动检测失败时悄悄去探测 9999，而不是坦白说端口没解析出来。现在没有这个 9999 兜底了。
+> 插件**没有 9999 兜底**：`Number(port) || 9999` 会把 `0` 当成假值变成 `9999`，
+> 于是自动检测失败时悄悄去探测 9999，而不是坦白说端口没解析出来；那会让「端口未知」这个诊断永远不可达。
 
 `gopeed_process` 会同时给进程信息：能不能查到进程、pid、内存占用。**注意区分**：
 `processProbe` 为 `unavailable` 时表示当前环境拿不到进程列表（权限受限），
@@ -384,8 +384,8 @@ gopeed_launch    # 没在跑就启动；在跑就什么都不做
 - **启动确认会边等边重新检测端口。** 新启动的 Gopeed 会换一个新的随机端口，而这个端口要等进程真正开始监听后才存在；
   如果整个等待期只探测一个旧端口，就会把启动成功报成失败。现在 15 秒预算内每约 700 毫秒重新检测并探测一次，
   和重启路径用的是同一套修法。
-- **启动前探测的是「解析后的端口」，不是配置里那个原始值。** 旧版本在 `port=0` 时拿 `0` 去探测，必然误判「没运行」，
-  然后重复启动第二个 Gopeed；已修。现在已经在跑就不会再启动。
+- **启动前探测的是「解析后的端口」，不是配置里那个原始值。** 拿 `0` 去探测必然误判「没运行」，
+  然后重复启动第二个 Gopeed；按解析后的端口探测，已经在跑就不会再启动。
 - **它不会重启任何东西。** 没有 `restart` 参数了；进程卡死请引导用户去配置页点「重启 Gopeed」。
 - **拿不到 pid 时不会假装成功**：重启路径会明确告诉你「重启需要 pid，但当前环境查不到进程列表」，并给出人工步骤。
 
@@ -393,9 +393,9 @@ gopeed_launch    # 没在跑就启动；在跑就什么都不做
 
 ## 七、实测记录
 
-### 已实测通过（0.1.x 时期，2026-10-31）
+### 已实测通过
 
-当时那一版的所有工具都真实调用过，其中进程/启动相关：
+所有工具都真实调用过（2026-10-31），其中进程/启动相关：
 
 ```
 gopeed_process -> verdict=running  API: ok(5ms)  Gopeed 1.9.3 responded normally
@@ -412,46 +412,41 @@ gopeed_launch  -> alreadyRunning=true, launched=false
 `gopeed_add` → `gopeed_status` → `gopeed_control`（pause / resume / remove）完整闭环，
 `code:1000 task not found` 被识别成「无需暂停」而不抛错，错路径启动报 `ENOENT`，空端口报 `stopped`。
 
-0.2.0 的新增能力（Webhook 三模式、`gopeed_events`、通知通道、重启按钮）与修复项见 [CHANGELOG](../CHANGELOG.md)；
-本轮的字符数则是直接在 **0.3.0** 代码上量出来的（见下表）。
+Webhook 三模式、`gopeed_events`、通知通道与重启按钮的当前行为见正文；版本历史见 [CHANGELOG](../CHANGELOG.md)。
 
-0.3.0 补充实测：
+其他补充：
 
 - **BT / 磁力做了浅测**：用 Debian 13.7 netinst ISO 的官方磁力链接端到端验证——metadata 解析出 756 MB、
   开始下载约 4 MB/s、跟踪 job 能正常跟上结束。没有 peers 的磁力、只靠 DHT、私有 tracker、重启后继续
   磁力任务这些更难的场景仍未验证。
 
-### 工具常驻开销：2714 → 1452 字符（约 679 → 363 token，按 4 字符/token 粗略折算）
+### 工具常驻开销：1452 字符（约 363 token，按 4 字符/token 粗略折算）
 
 DSH 每轮都会把每个工具的 `{name, description, parameters}` 投影进 system prompt（`output.schema`
-和 render 不进），所以这部分是纯常驻成本。9 个历史入口收敛成 7 个工具后（0.3.1 工作树实测，与 0.3.0 相同）：
+和 render 不进），所以这部分是纯常驻成本。7 个工具各自的字符数：
 
-| 工具（合并前） | 字符 | 工具（现在） | 字符 |
-|---|---:|---|---:|
-| `gopeed_add` | 508 | `gopeed_add` | 359 |
-| `gopeed_list` | 311 | `gopeed_list` | 191 |
-| `gopeed_status` | 232 | `gopeed_status` | 155 |
-| `gopeed_pause` + `gopeed_resume` + `gopeed_remove` | 728 | `gopeed_control`（合并） | 268 |
-| `gopeed_info` + `gopeed_process` | 581 | `gopeed_process`（合并） | 110 |
-| `gopeed_launch` | 354 | `gopeed_launch` | 134 |
-| — | — | `gopeed_events`（新增） | 235 |
-| **合计 9 个工具** | **2714** | **合计 7 个工具** | **1452（−47%）** |
+| 工具 | 字符 |
+|---|---:|
+| `gopeed_add` | 359 |
+| `gopeed_list` | 191 |
+| `gopeed_status` | 155 |
+| `gopeed_control` | 268 |
+| `gopeed_process` | 110 |
+| `gopeed_launch` | 134 |
+| `gopeed_events` | 235 |
+| **合计 7 个工具** | **1452** |
 
-做法：`pause/resume/remove` 合并成一个带 `action` 枚举的 `gopeed_control`，`info` 并入 `gopeed_process`，
-`gopeed_launch` 去掉 `restart` 参数，描述压成不重复 `gopeed_` 前缀的短语，参数描述只保留 `path`
-（否则容易把「目录」误传成「文件路径」），参数 schema 不写 `additionalProperties:false`
-（与 DSH 原生 `defineTool` 产出的形状一致，校验改在 `execute` 里做）。唯一不能靠参数名表达的语义
-——`force` 会连文件一起删——写在 `gopeed_control` 的描述里。名字、`required` 数组、枚举值这些 schema 骨架刻意没动：
-那才是 DSH 校验的东西，再压就只能删参数。**下载能力没有删减**。实测合计 **1452 字符，比最早的 1100 目标多 352**：
-其中 `gopeed_events` 净增 117（235 减去其余六个工具原本比 1100 目标少的 118），0.3.0 重写五条描述又加了 122（早期误记为 126，重新实测后修正），后续的背景任务措辞修订又加了 39，保存目录参数的说明又加了 37，文件名参数的说明又加了 37，117 + 122 + 39 + 37 + 37 = 352。其余取舍是刻意的——保留 `name` 参数、两个枚举和
-`required` 数组，因为把真实存在的参数或合法取值藏起来，比这些字符省下的代价更大（模型会传错）。
-上表左列的 `gopeed_pause` / `gopeed_resume` / `gopeed_remove` / `gopeed_info` 是历史工具名，现在已不存在。
+实测合计 **1452 字符，比 1100 目标多 352**。描述只保留一句「能做什么 + 边界」，不重复 `gopeed_` 前缀；
+参数描述只保留 `path`（否则容易把「目录」误传成「文件路径」）；参数 schema 不写 `additionalProperties:false`
+（与 DSH 原生 `defineTool` 产出的形状一致，校验在 `execute` 里做）。唯一不能靠参数名表达的语义
+——`force` 会连文件一起删——写在 `gopeed_control` 的描述里。
 
-0.3.0 的「下载完成自动唤醒」**本身没有增加常驻开销**：`gopeed_add` 只在 `output.schema` 里多了 `jobId` / `jobNote`，
-而 `output.schema` 不进 system prompt；`parameters` 一个字没动。真正让总数从 **1217 涨到 1339** 的是另一项 0.3.0 改动（后续措辞修订又加到 1452）：
-`gopeed_add` / `gopeed_list` / `gopeed_status` / `gopeed_process` / `gopeed_launch` 五条描述从原来的极短片段
-（如 `Create task.`）改成了说清「能做什么 + 边界」的一句话，合计 +122 字符。保存路径、host 校验、启动重探测和
-toast 开关都没有新增 prompt 文本。
+名字、`required` 数组、枚举值这些 schema 骨架刻意保留：那才是 DSH 校验的东西，再压就只能删参数；
+保留 `name` 参数、两个枚举和 `required` 数组，是因为把真实存在的参数或合法取值藏起来，比这些字符省下的代价更大（模型会传错）。
+**下载能力没有删减**。
+
+`gopeed_add` 的 `jobId` / `jobNote` 只在 `output.schema` 里，`output.schema` 不进 system prompt，
+`parameters` 也没有为下载完成自动唤醒增加任何字段：这条能力**不占常驻开销**。
 
 ### 检测到未就绪时，工具会主动找用户
 
@@ -521,8 +516,8 @@ explains it)` 结尾（Gopeed 回 HTTP 401，`code=1001 msg=unauthorized`）。�
    下载状态未知。
 10. **只读工具仍可能被自己的超时掐断。** `gopeed_list` / `gopeed_status` / `gopeed_control`（工具超时 25 秒）
     和 `gopeed_process`（30 秒）仍然无条件调用端口探测、没有内部时间预算，所以 Gopeed 冷启动时它们同样可能
-    撞上 DSH 的工具超时，调用被直接掐断、连一句解释都返回不了。0.3.1 只给写操作 `gopeed_add` 加了预算
-    （被掐断的写操作会留下一次没人认领的下载，代价更高）；只读工具失败重试很便宜，留到后续版本。
+    撞上 DSH 的工具超时，调用被直接掐断、连一句解释都返回不了。只有写操作 `gopeed_add` 带内部时间预算
+    （被掐断的写操作会留下一次没人认领的下载，代价更高）；只读工具失败重试很便宜，暂时不做。
 
 ---
 

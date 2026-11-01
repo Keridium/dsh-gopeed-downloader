@@ -147,7 +147,7 @@ desktop app never listens there unless you set it.
 With `port` at `0` the plugin asks Windows for the ports `Gopeed.exe` holds (`netstat -ano`, then
 `Get-NetTCPConnection`). When neither discloses them it says so and points at the fixed port instead of guessing.
 `portScan` exists for that case and is **off by default**, because sweeping the dynamic port range touches
-software unrelated to Gopeed. The old silent `9999` fallback is gone: it made an honest "port unknown"
+software unrelated to Gopeed. There is no silent `9999` fallback: it would make an honest "port unknown"
 diagnosis unreachable.
 
 </details>
@@ -179,8 +179,8 @@ diagnosis unreachable.
    loss: each live tracker settles as `killed` with a detail saying the download state is unknown.
 10. **Read-only tools can still be cut off by their own timeout.** `gopeed_list`, `gopeed_status` and
     `gopeed_control` (25 s) and `gopeed_process` (30 s) still probe for the listen port without an internal
-    bound, so a cold Gopeed can trip the DSH tool timeout and end the call with no message. `gopeed_add` got a
-    budget in 0.3.1 because a killed write risks an unaccounted download; a failed read is cheap to retry, so
+    bound, so a cold Gopeed can trip the DSH tool timeout and end the call with no message. `gopeed_add` has a
+    budget because a killed write risks an unaccounted download; a failed read is cheap to retry, so
     the same treatment is deferred.
 
 ## Going deeper
@@ -297,8 +297,8 @@ Run **`gopeed_process`** first; it classifies the situation into one of six verd
 | `unauthorized` | The process is fine, the token is wrong. | Fix the token on the plugin settings page. |
 | `unknown` | Wrong port or address, or the process table could not be read. | Check host, port and Gopeed's protocol setting. |
 
-`misconfigured` is the verdict that used to be reported as `stopped`: telling someone to launch a program that
-is already running sends them to the wrong fix. It only appears when the process probe can actually see the
+`misconfigured` keeps a wrong port from being reported as `stopped`: telling someone to launch a program
+that is already running sends them to the wrong fix. It only appears when the process probe can actually see the
 process. **Read `processProbe` before you believe `processFound`** -- when it is `unavailable` the environment
 would not hand over the process list, so `processFound: false` does **not** mean Gopeed is down. The probe
 checks whether it can see its own process first, and reports `unavailable` rather than an empty list that looks
@@ -384,38 +384,34 @@ entirely, because the jobs live inside the DSH process; the downloads keep runni
 </details>
 
 <details>
-<summary>System-prompt footprint: 1452 characters, and where the 352 comes from</summary>
+<summary>System-prompt footprint: 1452 characters, 352 over the 1100 target</summary>
 
 DSH projects every tool's `{name, description, parameters}` into the system prompt on every turn
-(`output.schema` and `render` do not), so that text is a permanent cost. Measured on the current working tree
-(0.3.1, unchanged since 0.3.0), nine historical entry points having become seven tools:
+(`output.schema` and `render` do not), so that text is a permanent cost. The seven tools measure:
 
-| Tool (before) | Characters | Tool (after) | Characters |
-|---|---:|---|---:|
-| `gopeed_add` | 508 | `gopeed_add` | 359 |
-| `gopeed_list` | 311 | `gopeed_list` | 191 |
-| `gopeed_status` | 232 | `gopeed_status` | 155 |
-| `gopeed_pause` + `gopeed_resume` + `gopeed_remove` | 728 | `gopeed_control` (merged) | 268 |
-| `gopeed_info` + `gopeed_process` | 581 | `gopeed_process` (merged) | 110 |
-| `gopeed_launch` | 354 | `gopeed_launch` | 134 |
-| -- | -- | `gopeed_events` (new) | 235 |
-| **9 tools total** | **2714** | **7 tools total** | **1452 (-47%)** |
+| Tool | Characters |
+|---|---:|
+| `gopeed_add` | 359 |
+| `gopeed_list` | 191 |
+| `gopeed_status` | 155 |
+| `gopeed_control` | 268 |
+| `gopeed_process` | 110 |
+| `gopeed_launch` | 134 |
+| `gopeed_events` | 235 |
+| **7 tools total** | **1452** |
 
-Three verbs collapsed into one `action` enum, `gopeed_info` folded into `gopeed_process`, `gopeed_launch` lost
-its `restart` parameter, descriptions were cut to a fragment that never repeats the `gopeed_` prefix, parameter
-descriptions were dropped except `path` (a wrong "file instead of directory" silently downloads to the wrong
-place), and `additionalProperties: false` was left out to match the shape `defineTool` produces (validation
-happens in `execute`). The one meaning that cannot live in a name -- `force` deletes files -- is carried by
-`gopeed_control`'s description. The schema skeleton (names, `required` arrays, enum values) is deliberately
-untouched: that is what DSH validates, so shrinking it further would drop parameters, not characters. **No
-download capability was removed** -- only the entry points were consolidated.
+The total is **1452 characters, 352 over the 1100 target**. Each description is one fragment that
+never repeats the `gopeed_` prefix, and parameter descriptions are dropped except `path` (a wrong
+"file instead of directory" silently downloads to the wrong place). `additionalProperties: false`
+is left out to match the shape `defineTool` produces (validation happens in `execute`). The one
+meaning that cannot live in a name -- `force` deletes files -- is carried by `gopeed_control`'s
+description.
 
-The measured total is **1452 characters, 352 over the original 1100 target**. The breakdown, so the arithmetic
-is checkable: before `gopeed_events` existed the six other tools sat 118 characters *under* the 1100 target, so
-`gopeed_events` is a net 235 - 118 = 117; the 0.3.0 description rewrites added 122; a later background-job
-wording change added 39; the save-directory parameter hint added 37; the file-name hint added 37; 117 + 122 + 39 + 37 + 37 = 352. The download wake-up cost **zero** prompt characters -- `jobId` /
-`jobNote` live in `output.schema` only. The names in the left column (`gopeed_pause`, `gopeed_resume`,
-`gopeed_remove`, `gopeed_info`) are historical and no longer exist as tools.
+The schema skeleton (names, `required` arrays, enum values) is deliberately kept: that is what DSH
+validates, so shrinking it further would drop parameters, not characters. `name` and the value
+enums stay for the same reason: hiding a real parameter or a legal value costs more in wrong calls
+than the characters save. **Every download capability is still exposed.** The download wake-up
+costs zero prompt characters, because `jobId` / `jobNote` live in `output.schema` only.
 
 </details>
 

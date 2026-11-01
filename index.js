@@ -96,7 +96,7 @@ export const inject = ['tools']
  * the user they are seeing a stale UI and need to restart DSH - without this field there is nothing
  * to compare against. A missing or unreadable package.json falls back to the constant below.
  */
-const FALLBACK_VERSION = '0.3.0'
+const FALLBACK_VERSION = '0.3.1'
 
 const PLUGIN_VERSION = (() => {
   try {
@@ -1290,7 +1290,8 @@ export function apply(ctx, config) {
 
   /**
    * Queue one accepted event and arm the debounce timer. Called after the event is already stored,
-   * so every early return here means "cache only", which is exactly the old behaviour.
+   * so every early return here means "cache only": the event stays stored and readable, it just
+   * never reaches the model.
    *
    * A task id a background job covers returns early: that job's settlement already becomes the
    * harness's completion notice, which reaches the same agent with more detail and is the only one
@@ -1567,10 +1568,10 @@ export function apply(ctx, config) {
     let port = apiPort || Number(config.port.get()) || 0
     let after = { state: 'unknown', detail: 'not probed yet' }
     for (;;) {
-      // Same two rules as gopeed_launch: check the budget BEFORE an iteration (the old trailing
-      // check ran one more detect+probe after the deadline had passed), and treat 'unauthorized'
-      // as terminal. This runner has no DSH tool timeout behind it, so the wasted time here is
-      // spent in front of a human who just pressed "Restart Gopeed".
+      // Same two rules as gopeed_launch: check the budget BEFORE an iteration, and treat
+      // 'unauthorized' as terminal. A trailing check must not be used: it runs one more
+      // detect+probe after the deadline has passed. This runner has no DSH tool timeout behind
+      // it, so the wasted time here is spent in front of a human who just pressed "Restart Gopeed".
       if (Date.now() >= deadline) break
       const detected = await ensureApiPort(true)
       if (detected > 0) port = detected
@@ -1872,12 +1873,12 @@ export function apply(ctx, config) {
   // gopeed_add's own time budget.
   //
   // timeoutMs below is the DSH TOOL timeout: when it expires DSH kills the call and the tool never
-  // gets to answer, so a cold start showed up as "timed out" instead of a real result. The old
-  // shape overran it easily: ensureApiPort alone may spend ~32s (tasklist 4s + Get-Process 8s +
-  // netstat 8s + Get-NetTCPConnection 12s, plus up to 3s per probed port), and the create request
-  // and its read-back each allowed Config.timeoutMs (up to 120000).
+  // gets to answer, so a cold start must not surface as "timed out" instead of a real result.
+  // Unbounded waits overrun it easily: ensureApiPort alone may spend ~32s (tasklist 4s +
+  // Get-Process 8s + netstat 8s + Get-NetTCPConnection 12s, plus up to 3s per probed port), and
+  // the create request and its read-back each allow Config.timeoutMs (up to 120000).
   //
-  // Fix: one internal budget, derived from the tool timeout, bounds EVERY wait, and each phase
+  // So: one internal budget, derived from the tool timeout, bounds EVERY wait, and each phase
   // that runs out reports what to do instead of running into the outer kill. Worst case:
   //   port phase  <= ADD_PORT_BUDGET_MS (12000)
   //   create      <= remaining - ADD_REQUEST_RESERVE_MS (10500 at worst)
@@ -1934,7 +1935,7 @@ export function apply(ctx, config) {
     // silent, wrong-download kind of mistake.
     //
     // Budget note: the seven tool definitions total 1452 characters, 352 over the original 1100
-    // target. `name` and the value enums were restored deliberately - a shorter schema that hides
+    // target. `name` and the value enums stay deliberately - a shorter schema that hides
     // a real parameter or a legal value costs more in wrong calls than the characters save. See
     // the footprint section of README.md for the measured per-tool breakdown.
     parameters: {
@@ -1952,7 +1953,7 @@ export function apply(ctx, config) {
         additionalProperties: false,
         // jobId / jobNote describe the optional background tracking job. They live in output.schema
         // only, which is never projected into the system prompt, so the 1452-character tool
-        // definition budget is untouched (parameters are unchanged).
+        // definition budget is untouched, because output.schema adds nothing to parameters.
         required: ['taskId', 'url', 'name', 'path', 'baseUrl', 'jobId', 'jobNote'],
         properties: {
           taskId: { type: 'string', description: 'Task id returned by Gopeed.' },
@@ -2016,7 +2017,7 @@ export function apply(ctx, config) {
             'config to the fixed port shown under Gopeed -> Settings -> Advanced -> Protocol.',
         )
         // Every request below is capped by what is left of the budget, so Config.timeoutMs (up to
-        // 120000) can no longer push the whole call past the DSH timeout.
+        // 120000) cannot push the whole call past the DSH timeout.
         addRequestTimeoutMs = Math.max(1000, remaining() - 1500)
         const taskId = await addClient.create({ url, path: saveTarget.path, name: taskName || undefined })
         // Read the task back: when `path` is omitted, Gopeed does NOT leave the save dir empty -- it
@@ -2412,7 +2413,7 @@ export function apply(ctx, config) {
       }
       // Process probing, executable resolution and /info are independent, so run them in
       // parallel to keep total latency down. /info is only asked for when the API already
-      // answers (this is where the old gopeed_info version data comes from).
+      // answers, and its /info payload supplies the `version` field.
       const [resolved, proc, info] = await Promise.all([
         resolveExecutable(config.exePath.get()),
         findProcess(config.exePath.get() || 'Gopeed.exe'),
@@ -2679,8 +2680,8 @@ export function apply(ctx, config) {
       let port = Number(config.port.get()) || 0
       let after = { state: 'unknown', detail: 'not probed yet' }
       for (;;) {
-        // Check the budget BEFORE an iteration, not after it: the old trailing check ran one more
-        // full detect+probe (and one more 700ms sleep) after the deadline had already passed.
+        // Check the budget BEFORE an iteration, not after it: a trailing check runs one more full
+        // detect+probe (plus one more 700ms sleep) after the deadline has already passed.
         if (Date.now() >= deadline) break
         const detected = await ensureApiPort(true)
         if (detected > 0) port = detected
