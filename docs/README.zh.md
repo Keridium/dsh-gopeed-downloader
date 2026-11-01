@@ -8,7 +8,7 @@
   <a href="../README.md">English</a> | 中文
 </p>
 
-> 本文档面向中文用户；agent 请阅读英文版 [README.md](../README.md)。
+> 本文档面向中文用户，是给人看的落地页；**agent 请阅读 [docs/AGENTS.md](AGENTS.md)**（工具契约），不要拿 README 当调用说明。
 
 把本机 **Gopeed** 下载器变成 **DeepSeek Harness (DSH)** 的 agent 工具：新建和管理下载任务、
 探测或启动 Gopeed 进程、接收下载完成事件（还能通过后台任务唤醒空闲的 agent）。
@@ -17,7 +17,7 @@ REST 类工具跨平台，进程控制仅支持 Windows。
 - **7 个工具**：`gopeed_add` / `gopeed_list` / `gopeed_status` / **`gopeed_control`**（暂停/继续/删除）/
   **`gopeed_process`**（进程 + API 诊断 + 版本 + Webhook 状态）/ **`gopeed_launch`**（只在没跑时启动）/
   **`gopeed_events`**（读下载完成事件；auto 模式下可保存 Webhook 配置）
-- **进 system prompt 的常驻开销只有 1452 字符**（约 363 token，按 4 字符/token 粗略折算）：7 个工具的「名字 + 一段英文短语描述 + 极简参数」；
+- **进 system prompt 的常驻开销只有 1452 字符**（实测：加载 7 个工具定义后按 `{name,description,parameters}` 序列化计长）：7 个工具的「名字 + 一段英文短语描述 + 极简参数」；
   工具返回的正文同样是英文（工具输出也属于 agent 可见内容）。取舍理由见「七、实测记录」
 - **下载保存位置可选，不是藏起来的默认值**：`downloadTarget` 三选一——`workspace`（默认，会话的当前工作目录，`cd` 之后跟着变）/
   `gopeed`（交给 Gopeed 自己的下载目录）/ `custom`（用 `customDownloadPath`）。agent 显式传 `path` 时永远以它为准。
@@ -25,7 +25,7 @@ REST 类工具跨平台，进程控制仅支持 Windows。
   因此返回的 `path` 是**实际落盘目录**，不是把入参原样抄回来
 - **下载完成推送（Webhook）三模式**：`off`（默认，不监听）/ `manual`（插件监听，地址由你手动填进 Gopeed）/
   `auto`（插件监听，且允许 `gopeed_events action=apply` 把地址保存进 Gopeed 配置）。详见「五」
-- **下载完成自动唤醒（0.3.0）**：`gopeed_add` 会把这次下载注册成 **DSH 后台任务**（`kind: "gopeed"`），
+- **下载完成自动唤醒**：`gopeed_add` 会把这次下载注册成 **DSH 后台任务**（`kind: "gopeed"`），
   下载结束时任务 settle，由 DSH 官方 `dsh-tool-jobs` 发出**它自己的**完成通知：agent 忙就下一轮读到，
   agent 空闲就**开新一轮把它唤醒**。通知文字属于 harness，插件不写任何用户身份的消息
 - **通知不进对话**：右下角 toast（6 秒自动消失）+ `Agent.inject`（只进下一轮模型上下文，**不唤醒 agent**，
@@ -383,7 +383,7 @@ gopeed_launch    # 没在跑就启动；在跑就什么都不做
   **效果等同双击图标**；启动后会轮询 API 最多 15 秒确认就绪。
 - **启动确认会边等边重新检测端口。** 新启动的 Gopeed 会换一个新的随机端口，而这个端口要等进程真正开始监听后才存在；
   如果整个等待期只探测一个旧端口，就会把启动成功报成失败。现在 15 秒预算内每约 700 毫秒重新检测并探测一次，
-  和重启路径用的是同一套修法。
+  和重启路径共用同一套端口重检测逻辑。
 - **启动前探测的是「解析后的端口」，不是配置里那个原始值。** 拿 `0` 去探测必然误判「没运行」，
   然后重复启动第二个 Gopeed；按解析后的端口探测，已经在跑就不会再启动。
 - **它不会重启任何东西。** 没有 `restart` 参数了；进程卡死请引导用户去配置页点「重启 Gopeed」。
@@ -420,7 +420,7 @@ Webhook 三模式、`gopeed_events`、通知通道与重启按钮的当前行为
   开始下载约 4 MB/s、跟踪 job 能正常跟上结束。没有 peers 的磁力、只靠 DHT、私有 tracker、重启后继续
   磁力任务这些更难的场景仍未验证。
 
-### 工具常驻开销：1452 字符（约 363 token，按 4 字符/token 粗略折算）
+### 工具常驻开销：1452 字符（实测）
 
 DSH 每轮都会把每个工具的 `{name, description, parameters}` 投影进 system prompt（`output.schema`
 和 render 不进），所以这部分是纯常驻成本。7 个工具各自的字符数：
@@ -459,7 +459,7 @@ DSH 每轮都会把每个工具的 `{name, description, parameters}` 投影进 s
 explains it)` 结尾（Gopeed 回 HTTP 401，`code=1001 msg=unauthorized`）。这句话已经说明「端口是对的、只是 Token 不对」，
 所以把 Gopeed 和插件两边的 Token 对齐即可，不用去查端口、也不用重装。
 
-注意它**不是聊天消息**：`deferContext` 已被移除，插件不会以用户身份说话。
+注意它**不是聊天消息**：插件只把摘要排进下一轮模型上下文（`Agent.inject`），不会以用户身份说话。
 
 ### 一个必须知道的坑：沙箱 vs 插件运行环境
 
@@ -516,12 +516,25 @@ explains it)` 结尾（Gopeed 回 HTTP 401，`code=1001 msg=unauthorized`）。�
    下载状态未知。
 10. **只读工具仍可能被自己的超时掐断。** `gopeed_list` / `gopeed_status` / `gopeed_control`（工具超时 25 秒）
     和 `gopeed_process`（30 秒）仍然无条件调用端口探测、没有内部时间预算，所以 Gopeed 冷启动时它们同样可能
-    撞上 DSH 的工具超时，调用被直接掐断、连一句解释都返回不了。只有写操作 `gopeed_add` 带内部时间预算
-    （被掐断的写操作会留下一次没人认领的下载，代价更高）；只读工具失败重试很便宜，暂时不做。
+    撞上 DSH 的工具超时，调用被直接掐断、连一句解释都返回不了。只有写操作 `gopeed_add` 带内部时间预算：工具超时 25 秒、内部预算 22.5 秒（端口探测硬上限 12 秒），
+    22.5 秒 < 25 秒，所以它能在被 DSH 掐断前返回（被掐断的写操作会留下一次没人认领的下载，代价更高）；
+    只读工具失败重试很便宜，暂时不做。
 
 ---
 
-## 十、致谢与非官方声明
+## 十、文档
+
+- **[docs/AGENTS.md](AGENTS.md)** -- **agent 契约；请把 agent 指向这里，而不是本 README。** 工具表（含 DSH 校验的返回字段）、
+  不许轮询的规则、保存位置顺序、按 `verdict` 索引的错误手册，以及明确的禁止清单。
+- [docs/README.zh.md](README.zh.md) -- 本文档，中文全版，可在 GitHub 上直接阅读。
+- [docs/GETTING-STARTED.md](GETTING-STARTED.md) -- 中文手把手教程：装 Gopeed、固定端口、安装 bundle、配置，
+  最后用一次真实下载验证。
+- [CHANGELOG.md](../CHANGELOG.md) -- 每个已发布版本改了什么。
+
+> `docs/` **不在 `files` 里**，所以装好的插件目录里只有根 `README.md`、`CHANGELOG.md` 和许可证，没有这份中文文档和其他
+> `docs/` 内容；中文文档只在 GitHub 上可读。没有构建步骤：发布的就是源码。
+
+## 十一、致谢与非官方声明
 
 本插件是一个**独立的、非官方的**集成。它通过 REST API 与本地运行的
 [Gopeed](https://github.com/GopeedLab/gopeed)（一个支持 HTTP / BitTorrent / 磁力 / ed2k 的现代下载器）通信，

@@ -179,9 +179,11 @@ diagnosis unreachable.
    loss: each live tracker settles as `killed` with a detail saying the download state is unknown.
 10. **Read-only tools can still be cut off by their own timeout.** `gopeed_list`, `gopeed_status` and
     `gopeed_control` (25 s) and `gopeed_process` (30 s) still probe for the listen port without an internal
-    bound, so a cold Gopeed can trip the DSH tool timeout and end the call with no message. `gopeed_add` has a
-    budget because a killed write risks an unaccounted download; a failed read is cheap to retry, so
-    the same treatment is deferred.
+    bound, so a cold Gopeed can trip the DSH tool timeout and end the call with no message.
+    `gopeed_add` is the exception: its tool timeout is 25 s and its internal budget is 22.5 s (port
+    probing is hard-capped at 12 s), so 22.5 s < 25 s and the call returns before DSH's own kill at 25 s.
+    A killed write would risk an unaccounted download; a failed read is cheap to retry, so the same
+    treatment is deferred for the rest.
 
 ## Going deeper
 
