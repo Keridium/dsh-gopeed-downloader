@@ -42,6 +42,10 @@
   },
   "author": "Keridium (https://github.com/Keridium)",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "engines": {
     "node": ">=18"
   },
