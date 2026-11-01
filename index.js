@@ -647,15 +647,16 @@ export function apply(ctx, config) {
   const installPromptSection = (scoped) => {
     const prompt = scoped?.systemPrompt
     if (!prompt || typeof prompt.section !== 'function') return
-    const shellOrder = typeof prompt.getSectionOrder === 'function' ? prompt.getSectionOrder('TOOL_PWSH') : undefined
+    const webOrder = typeof prompt.getSectionOrder === 'function' ? prompt.getSectionOrder('TOOL_WEB_SEARCH') : undefined
     prompt.section({
       name: 'tool:gopeed',
-      // Fall back to a slot inside the tool range when the host ships no TOOL_PWSH placement.
-      order: Number.isFinite(shellOrder) ? shellOrder + 5 : 3040,
+      // Next to the other "fetch something from the network" tools, not next to the shell tools: the
+      // rule is about downloading a file, and sitting right against pwsh made it read like a general
+      // warning about using a shell at all.
+      order: Number.isFinite(webOrder) ? webOrder - 10 : 1990,
       text:
-        'Downloads: use gopeed_add instead of curl, wget or Invoke-WebRequest. It hands the transfer ' +
-        'to Gopeed, returns a background job immediately, and notifies this session when the transfer ' +
-        'ends -- do not poll for progress.',
+        'Downloads: gopeed_add over curl/wget (background job, notifies on completion, no polling). ' +
+        'Shell remains right for everything else.',
     })
   }
   if (typeof ctx.inject === 'function') {
