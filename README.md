@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="icon.svg" width="88" height="88" alt="dsh-gopeed">
+  <img src="icon.svg" width="88" height="88" alt="dsh-gopeed-downloader">
 </p>
 
-<h1 align="center">dsh-gopeed</h1>
+<h1 align="center">dsh-gopeed-downloader</h1>
 
 <p align="center">
-  English | <a href="https://github.com/Keridium/dsh-gopeed/blob/main/docs/README.zh.md">Chinese</a>
+  English | <a href="https://github.com/Keridium/dsh-gopeed-downloader/blob/main/docs/README.zh.md">Chinese</a>
 </p>
 
 <p align="center">
@@ -13,7 +13,7 @@
 </p>
 
 > [!IMPORTANT]
-> **Reading this as an agent? Stop and open [docs/AGENTS.md](https://github.com/Keridium/dsh-gopeed/blob/main/docs/AGENTS.md) instead.**
+> **Reading this as an agent? Stop and open [docs/AGENTS.md](https://github.com/Keridium/dsh-gopeed-downloader/blob/main/docs/AGENTS.md) instead.**
 >
 > That file is the contract: the seven tools with the result fields DSH validates, the **do-not-poll** rule
 > for `gopeed_add`, the save-location order, an error playbook keyed on `verdict`, and an explicit do-not
@@ -72,11 +72,11 @@ one. See [Configuration](#configuration).
 
 There is nothing to add by hand. In any DSH session, tell the agent:
 
-> Install the `dsh-gopeed` bundle from its Git URL.
+> Install the `dsh-gopeed-downloader` bundle from its Git URL.
 
 That is `plugin_manager` with `action: "install_bundle"` and the repository URL as `target`. DSH parses the
 spec, checks reachability, installs it with its own package manager and enables the bundle; restart DSH when
-it asks. Uninstall with `action: "remove_bundle"`, `target: "dsh-gopeed"`. The Web UI equivalent is
+it asks. Uninstall with `action: "remove_bundle"`, `target: "dsh-gopeed-downloader"`. The Web UI equivalent is
 **Plugins -> Installed**.
 
 Then open **Plugins -> Installed -> Gopeed Downloader -> row `gopeed` -> Configure** and, if Gopeed uses a
@@ -280,7 +280,7 @@ arrive. `gopeed_process` also reports the webhook status, so the wiring can be c
    in-session completion notice (busy agent: next step; idle agent: woken with a follow-up turn).
 2. **The bottom-right toast -- opt-in and human-facing** (`webhookToast`, off by default because Gopeed already
    posts its own Windows notification). The page polls an authenticated
-   `GET /api/dsh-gopeed/notifications` route and each toast vanishes after 6 seconds; it never marks the buffer
+   `GET /api/dsh-gopeed-downloader/notifications` route and each toast vanishes after 6 seconds; it never marks the buffer
    as read.
 3. **`Agent.inject` -- the fallback, for a completion no job covers** (a download started in the Gopeed UI, or a
    host whose composition has no `ctx.jobs`). The same summary is queued as model-facing context for the
@@ -456,8 +456,8 @@ imports anything from DSH, so both can be exercised with plain Node.
 
 **Language policy.** The plugin carries no Chinese: every string in `index.js` and `lib/` is English (tool names,
 descriptions, `render()` output, messages, error text, comments), because tool descriptions sit in the system
-prompt on every turn. Chinese lives only in the docs -- [docs/README.zh.md](https://github.com/Keridium/dsh-gopeed/blob/main/docs/README.zh.md)
-and [docs/GETTING-STARTED.md](https://github.com/Keridium/dsh-gopeed/blob/main/docs/GETTING-STARTED.md) are
+prompt on every turn. Chinese lives only in the docs -- [docs/README.zh.md](https://github.com/Keridium/dsh-gopeed-downloader/blob/main/docs/README.zh.md)
+and [docs/GETTING-STARTED.md](https://github.com/Keridium/dsh-gopeed-downloader/blob/main/docs/GETTING-STARTED.md) are
 reading material for Chinese-speaking humans, not agent input. One deliberate exception: `client.js` ships a
 `zh` / `en` dictionary for the settings form and the toasts, because that interface is read by the person
 configuring the plugin. When editing a string, ask who reads it: model context -> English; a human in the Web UI
@@ -467,12 +467,12 @@ or on GitHub -> follow that split.
 
 ## Documentation
 
-- **[docs/AGENTS.md](https://github.com/Keridium/dsh-gopeed/blob/main/docs/AGENTS.md)** -- **the agent contract; send an agent here, not to this README.** Tool
+- **[docs/AGENTS.md](https://github.com/Keridium/dsh-gopeed-downloader/blob/main/docs/AGENTS.md)** -- **the agent contract; send an agent here, not to this README.** Tool
   table with the result fields DSH validates, the do-not-poll rule, the save-location order, an error playbook
   keyed on `verdict`, and an explicit do-not list.
-- [docs/README.zh.md](https://github.com/Keridium/dsh-gopeed/blob/main/docs/README.zh.md) -- the full Chinese
+- [docs/README.zh.md](https://github.com/Keridium/dsh-gopeed-downloader/blob/main/docs/README.zh.md) -- the full Chinese
   edition of this document.
-- [docs/GETTING-STARTED.md](https://github.com/Keridium/dsh-gopeed/blob/main/docs/GETTING-STARTED.md) -- a
+- [docs/GETTING-STARTED.md](https://github.com/Keridium/dsh-gopeed-downloader/blob/main/docs/GETTING-STARTED.md) -- a
   click-by-click Chinese walkthrough: install Gopeed, pin the port, install the bundle, configure it, verify
   with a real download.
 - [CHANGELOG.md](CHANGELOG.md) -- what changed in each released version.

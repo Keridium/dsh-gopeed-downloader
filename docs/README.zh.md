@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="../icon.svg" width="88" height="88" alt="dsh-gopeed">
+  <img src="../icon.svg" width="88" height="88" alt="dsh-gopeed-downloader">
 </p>
 
-<h1 align="center">dsh-gopeed</h1>
+<h1 align="center">dsh-gopeed-downloader</h1>
 
 <p align="center">
   <a href="../README.md">English</a> | 中文
@@ -103,11 +103,11 @@ REST 类工具跨平台，进程控制仅支持 Windows。
 <details>
 <summary>安装 target 支持的三类形式、卸载，以及不重启 DSH 的小技巧</summary>
 
-`install_bundle` 的 `target` 还可以填 **git URL**（如 `https://github.com/owner/dsh-gopeed`，
+`install_bundle` 的 `target` 还可以填 **git URL**（如 `https://github.com/owner/dsh-gopeed-downloader`，
 需要机器上有 `git`，装前会先跑一次 `git ls-remote` 探活）或 **tarball URL**
 （如 `.../archive/refs/tags/v0.1.1.tar.gz`，走压缩包、**不需要 git**）。相对路径会被拒绝，必须是绝对路径。
 
-卸载同理：`plugin_manager` 的 `remove_bundle`，`target` 填 `dsh-gopeed`，然后重启 DSH。
+卸载同理：`plugin_manager` 的 `remove_bundle`，`target` 填 `dsh-gopeed-downloader`，然后重启 DSH。
 
 > 为什么强调这个：`pnpm` 是靠全局 Node 装的，换一台没装 Node 的机器就跑不了。
 > `plugin_manager` 是 DSH 自带的能力，机器上只要有 DSH 就能用。
@@ -297,7 +297,7 @@ GUI 里也可能一直显示旧值，所以「设置页看起来没变」并不�
    通知文字属于 harness，插件不冒充用户。详见下面「下载完成自动唤醒」。
 2. **右下角 toast（默认关闭，给人看）**：`webhookToast` 默认关，因为 Gopeed 自己已经会在 Windows 通知中心
    弹一条，插件的 toast 会和它重复；打开后由插件自己的前端渲染，6 秒自动消失。页面通过需要鉴权的
-   `GET /api/dsh-gopeed/notifications` 轮询；这个通道**不会**把事件标记为已读，所以之后 `gopeed_events`
+   `GET /api/dsh-gopeed-downloader/notifications` 轮询；这个通道**不会**把事件标记为已读，所以之后 `gopeed_events`
    看到的 unread 数仍然是对的。
 3. **`Agent.inject`（降级通道）**：只用于**没有后台任务覆盖**的完成——你在 Gopeed 界面里自己加的下载、
    别的客户端加的下载，或宿主根本没装 `ctx.jobs`。同一份摘要作为模型可见上下文排进 agent 的**下一轮**，
@@ -518,9 +518,9 @@ explains it)` 结尾（Gopeed 回 HTTP 401，`code=1001 msg=unauthorized`）。�
 ### 目录结构
 
 ```
-dsh-gopeed/
+dsh-gopeed-downloader/
 ├─ package.json          # bundle 清单：dsh.bundle.patch + dsh.client（Web 端）
-├─ cordis.patch.yml      # 往 profile 组合里插入一行 id=gopeed、name=dsh-gopeed
+├─ cordis.patch.yml      # 往 profile 组合里插入一行 id=gopeed、name=dsh-gopeed-downloader
 ├─ index.js              # Host 半：Config + 注册 7 个工具 + Webhook 接收器 + 重启路由
 ├─ client.js             # Web 半：配置表单（下载位置/地址/端口/Token/程序路径/Webhook）+ 右下角通知 + 重启按钮
 ├─ lib/api.js            # REST 客户端 + 任务归一化 + 进程探测/启动（不 import 任何 DSH 包）

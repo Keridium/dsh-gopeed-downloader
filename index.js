@@ -84,7 +84,7 @@ import {
 import { createWebhookReceiver, mergeWebhookUrls } from './lib/webhook.js'
 
 /** Plugin name used by the Loader for diagnostics. */
-export const name = 'dsh-gopeed'
+export const name = 'dsh-gopeed-downloader'
 
 /** Required Host service: the tool registry. */
 export const inject = ['tools']

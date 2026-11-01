@@ -1,5 +1,5 @@
 {
-  "name": "dsh-gopeed",
+  "name": "dsh-gopeed-downloader",
   "version": "0.3.1",
   "private": false,
   "description": "Agent tools for a local Gopeed downloader: create, inspect, pause, resume and remove downloads; diagnose or launch the Gopeed process; and receive download-complete events, including a background job that can wake an idle agent. The REST tools are cross-platform; process control is Windows-only.",
@@ -34,11 +34,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Keridium/dsh-gopeed.git"
+    "url": "git+https://github.com/Keridium/dsh-gopeed-downloader.git"
   },
-  "homepage": "https://github.com/Keridium/dsh-gopeed#readme",
+  "homepage": "https://github.com/Keridium/dsh-gopeed-downloader#readme",
   "bugs": {
-    "url": "https://github.com/Keridium/dsh-gopeed/issues"
+    "url": "https://github.com/Keridium/dsh-gopeed-downloader/issues"
   },
   "author": "Keridium (https://github.com/Keridium)",
   "license": "MIT",

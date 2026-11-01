@@ -1,11 +1,11 @@
 # Changelog
 
-All notable changes to `dsh-gopeed` are documented in this file.
+All notable changes to `dsh-gopeed-downloader` are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries are English because
 this file is part of the repository that both people and agents read; the Chinese edition of the
-project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gopeed/blob/main/docs/README.zh.md).
+project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gopeed-downloader/blob/main/docs/README.zh.md).
 
 ## [0.3.1] - 2026-11-01
 
@@ -120,7 +120,7 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
 
 - **Three notification channels instead of two, with no duplicate delivery.** The overlay toast is still
   independent of the agent, but it is now opt-in (`webhookToast`, off by default). `Agent.inject`
-  (`source: { kind: "dsh-gopeed" }`, no chat bubble) is now the **fallback**, used only for a completion no job
+  (`source: { kind: "dsh-gopeed-downloader" }`, no chat bubble) is now the **fallback**, used only for a completion no job
   covers -- a download started in the Gopeed UI or by another client, or any download on a host without
   `ctx.jobs`. A task a background job owns is deliberately **not** injected, because the job notice already
   carries the same completion and a real session showed the model reading it twice. `webhookNotify` now gates
@@ -301,7 +301,7 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
     the config back.
 - **Two notification channels, neither of which writes a chat message.** A finished download produces
   a bottom-right toast rendered by the plugin's own client half (fed by an authenticated
-  `GET /api/dsh-gopeed/notifications` route), and the same summary is handed to the agent as
+  `GET /api/dsh-gopeed-downloader/notifications` route), and the same summary is handed to the agent as
   model-facing context (`Agent.inject`, which does not wake the driver). `webhookNotify` (default on)
   controls both.
 - **`webhookPort`** - `0` lets the system pick a free port; the settings form has a random-port button

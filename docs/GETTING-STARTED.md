@@ -1,4 +1,4 @@
-# dsh-gopeed 上手指南
+# dsh-gopeed-downloader 上手指南
 
 > 本手册面向中文用户（人工阅读）。agent 请阅读 [README.md](../README.md)。
 
@@ -6,7 +6,7 @@
 
 ## 这份文档能帮你做什么
 
-装好 Gopeed、配置好它的接口地址和端口、在 DSH 里启用 `dsh-gopeed` 插件，然后你就可以直接对 agent 说「下载这个链接」，不必自己打开下载软件。照着做大约 10 分钟。
+装好 Gopeed、配置好它的接口地址和端口、在 DSH 里启用 `dsh-gopeed-downloader` 插件，然后你就可以直接对 agent 说「下载这个链接」，不必自己打开下载软件。照着做大约 10 分钟。
 
 ## 第 1 步：安装 Gopeed
 
@@ -68,7 +68,7 @@ Token 就是一把「暗号」，Gopeed 和插件两边必须完全一样。**Go
 1. 回到 DSH 的网页界面，打开任意一个对话。
 2. 把下面这句话**整句复制**，发给 agent：
 
-   > 用 plugin_manager 安装 dsh-gopeed 这个 bundle
+   > 用 plugin_manager 安装 dsh-gopeed-downloader 这个 bundle
 
 3. 等 agent 回复。如果它弹出确认或请求批准，点同意。
 4. **你应该看到**：左侧「插件」→「已安装」里出现 **`Gopeed 下载器`**。

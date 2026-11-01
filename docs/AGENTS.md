@@ -1,6 +1,6 @@
-# dsh-gopeed: the agent contract
+# dsh-gopeed-downloader: the agent contract
 
-Agent-facing contract for **`dsh-gopeed`**, a DSH bundle that drives a local
+Agent-facing contract for **`dsh-gopeed-downloader`**, a DSH bundle that drives a local
 [Gopeed](https://gopeed.com/) download manager. This file is for the model that calls the tools. Human
 documentation -- install, settings page, design notes -- is in [README.md](../README.md); read it only when a
 human-facing detail is needed, not for instructions.
