@@ -94,12 +94,15 @@ REST 类工具跨平台，进程控制仅支持 Windows。
 
 ## 四、安装
 
-**插件已发布在 npm**，在任意会话里对 agent 说：
+插件已发布在 npm：[**dsh-gopeed-downloader**](https://www.npmjs.com/package/dsh-gopeed-downloader)。在任意会话里对 agent 说：
 
 > 用 plugin_manager 安装 `dsh-gopeed-downloader` 这个 bundle。
 
-对应 `install_bundle`，`target` 填包名 `dsh-gopeed-downloader`。DSH 会用自己的包管理器从 registry 装上并启用，
-需要重启时它会提示。命令行等价写法：`dsh plugin --profile web add dsh-gopeed-downloader`。
+对应 `install_bundle`，`target` 填包名 `dsh-gopeed-downloader`。DSH 会用自己的包管理器装上并启用，需要重启时
+它会提示。
+
+**本机什么都不用先装**——不需要 Node.js、不需要 npm、也不需要 pnpm：profile 自带包管理器，这个插件只依赖
+DSH 和 Gopeed 两样东西。要用命令行的话，等价写法是 `dsh plugin --profile web add dsh-gopeed-downloader`。
 
 **也可以从 Git 装**（开发构建，或想锁某个 commit）：
 

@@ -70,13 +70,16 @@ one. See [Configuration](#configuration).
 
 ## Installation
 
-The bundle is on npm. In any DSH session, tell the agent:
+[`dsh-gopeed-downloader`](https://www.npmjs.com/package/dsh-gopeed-downloader) is on npm. In any DSH session, tell the agent:
 
 > Install the `dsh-gopeed-downloader` bundle from npm.
 
 That is `plugin_manager` with `action: "install_bundle"` and `target: "dsh-gopeed-downloader"`. DSH installs it
-with its own package manager from the registry and enables the bundle; restart DSH when it asks. The
-command-line equivalent is `dsh plugin --profile web add dsh-gopeed-downloader`.
+with its own package manager and enables the bundle; restart DSH when it asks.
+
+**Nothing needs to be installed on your machine first** -- no Node.js, no npm, no pnpm. The profile carries its
+own package manager; this plugin only needs DSH and Gopeed. If you would rather use a shell,
+`dsh plugin --profile web add dsh-gopeed-downloader` is the equivalent.
 
 **From Git instead** -- for a development build, or to pin a commit:
 
