@@ -20,6 +20,13 @@ Use them when the user:
 Do **not** use them to read a downloaded file, to fetch a web page for context, or as a general HTTP client.
 `gopeed_add` starts a real download to disk; it is not a probe.
 
+**Do not download with a shell.** `curl`, `wget`, `Invoke-WebRequest` and their relatives all block
+the turn until the transfer ends, cannot be paused or resumed, and leave this session with nothing to
+wait on. `gopeed_add` hands the transfer to Gopeed, returns immediately, and a DSH background job
+notifies this session when it ends -- waking an idle agent if needed. When a dedicated downloader is
+running on the machine, that downloader is the right tool and the shell is the wrong default; the
+"download" category has a purpose-built tool here, so reach for it before the generic one.
+
 ## The seven tools
 
 | Tool | Use it for | Parameters | Result fields (DSH validates this shape) |
