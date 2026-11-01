@@ -96,7 +96,7 @@ export const inject = ['tools']
  * the user they are seeing a stale UI and need to restart DSH - without this field there is nothing
  * to compare against. A missing or unreadable package.json falls back to the constant below.
  */
-const FALLBACK_VERSION = '0.3.2'
+const FALLBACK_VERSION = '0.3.3'
 
 const PLUGIN_VERSION = (() => {
   try {
@@ -640,6 +640,11 @@ export function apply(ctx, config) {
     else ctx.logger?.info?.('dsh-gopeed-downloader: no sandbox service; launch and stop will be reported as unconfined')
   }
 
+  /** The one rule this plugin contributes to the system prompt; empty string means "do not inject". */
+  const GOPEED_PROMPT_TEXT =
+    'Use gopeed_add as the default download tool (background job, notifies on completion, ' +
+    'no polling).'
+
   // The agent-facing contract lives in docs/AGENTS.md, and nothing loads that file automatically: an
   // agent that never opens it behaves as if the contract did not exist. This section puts the one rule
   // that prevents the most common wrong call into the system prompt itself. It sits right after the
@@ -654,9 +659,20 @@ export function apply(ctx, config) {
       // rule is about downloading a file, and sitting right against pwsh made it read like a general
       // warning about using a shell at all.
       order: Number.isFinite(webOrder) ? webOrder - 10 : 1990,
-      text:
-        'Use gopeed_add as the default download tool (background job, notifies on completion, ' +
-        'no polling).',
+      // Same contract as the official dsh-tool-web sections: `text` is a function of the assembly,
+      // and a scope that does not expose gopeed_add gets an empty string instead of being told to
+      // use a tool it cannot see. `tools.get(name, scope)` is the exact lookup the harness itself
+      // uses for that decision. A simplified host without that lookup keeps the static text, so a
+      // missing service degrades to the old guidance rather than throwing during prompt assembly.
+      text: ({ scope } = {}) => {
+        const tools = lookupService(scoped, 'tools') ?? ctx.tools
+        if (!tools || typeof tools.get !== 'function') return GOPEED_PROMPT_TEXT
+        try {
+          return tools.get('gopeed_add', scope) === undefined ? '' : GOPEED_PROMPT_TEXT
+        } catch {
+          return GOPEED_PROMPT_TEXT
+        }
+      },
     })
   }
   if (typeof ctx.inject === 'function') {
@@ -1947,6 +1963,50 @@ export function apply(ctx, config) {
     }
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // Time budget for the READ-ONLY tools.
+  //
+  // gopeed_list / gopeed_status / gopeed_control / gopeed_process used to call ensureApiPort()
+  // unbounded. That probe can spend ~32s on a cold host (tasklist, Get-Process, netstat,
+  // Get-NetTCPConnection, plus up to 3s per probed port), which is past the DSH tool timeout: the
+  // call was killed by the host and its real error was lost. They now reuse the same cappedAwait()
+  // bound as gopeed_add: the port phase gives up with an actionable message well before the tool
+  // timeout, and a normal 1-2s call never touches the bound.
+  // ---------------------------------------------------------------------------------------------
+
+  /** DSH tool timeout for gopeed_list, gopeed_status and gopeed_control; declared on each tool. */
+  const READ_TOOL_TIMEOUT_MS = 25000
+  /** DSH tool timeout for gopeed_process; it does more probes, so DSH gives it longer. */
+  const PROCESS_TOOL_TIMEOUT_MS = 30000
+  /** Head room kept for wrapping up and returning, so the call ends before DSH kills it. */
+  const READ_BUDGET_MARGIN_MS = 2500
+  /** Whole-call budget for the 25s read-only tools. */
+  const READ_BUDGET_MS = READ_TOOL_TIMEOUT_MS - READ_BUDGET_MARGIN_MS
+  /** Whole-call budget for gopeed_process (30s tool timeout). */
+  const PROCESS_BUDGET_MS = PROCESS_TOOL_TIMEOUT_MS - READ_BUDGET_MARGIN_MS
+  /** Hard slice for the port phase, the only phase that can spend tens of seconds. */
+  const READ_PORT_BUDGET_MS = 12000
+
+  /**
+   * `ensureApiPort`, bounded by both the port slice and what is left of the call's own budget.
+   *
+   * On timeout it throws a message that says which tool gave up and what to do instead, rather than
+   * letting the DSH tool timeout kill the call with nothing to show.
+   * @param {string} tool Tool name used in the error text.
+   * @param {number} deadline Date.now() value at which the whole call must be done.
+   * @param {boolean} [force] Skip the configured/cached port and detect even when one is configured.
+   */
+  const ensureApiPortWithin = (tool, deadline, force = false) => {
+    const slice = Math.max(500, Math.min(READ_PORT_BUDGET_MS, deadline - Date.now()))
+    return cappedAwait(
+      ensureApiPort(force),
+      slice,
+      `gave up detecting the Gopeed API port after ${slice}ms, so ${tool} did not run. ` +
+        'Retry in a moment - a cold Gopeed may still be starting - or set "port" in the plugin ' +
+        'config to the fixed port shown under Gopeed -> Settings -> Advanced -> Protocol.',
+    )
+  }
+
   ctx.tools.register({
     name: 'gopeed_add',
     description: 'Download a URL through Gopeed. Returns a background job that notifies when it ends.',
@@ -2114,10 +2174,11 @@ export function apply(ctx, config) {
     },
     isConcurrencySafe: () => true,
     presentCall: () => ({ card: 'generic', title: 'Gopeed tasks', kind: 'other' }),
-    timeoutMs: 25000,
+    timeoutMs: READ_TOOL_TIMEOUT_MS,
     async execute(args, exec) {
       rememberAgent(exec)
-      await ensureApiPort()
+      // Bounded port phase: it ends with an explained error instead of the DSH kill (see above).
+      await ensureApiPortWithin('gopeed_list', Date.now() + READ_BUDGET_MS)
       const filter = optString(args?.status).toLowerCase()
       // The status list lives here instead of in the tool schema (see gopeed_add's note): a wrong
       // filter would otherwise return "no tasks" and look like an empty downloader.
@@ -2149,10 +2210,10 @@ export function apply(ctx, config) {
     },
     isConcurrencySafe: () => true,
     presentCall: () => ({ card: 'generic', title: 'Gopeed task status', kind: 'other' }),
-    timeoutMs: 25000,
+    timeoutMs: READ_TOOL_TIMEOUT_MS,
     async execute(args, exec) {
       rememberAgent(exec)
-      await ensureApiPort()
+      await ensureApiPortWithin('gopeed_status', Date.now() + READ_BUDGET_MS)
       const id = reqString(args?.id, 'id')
       try {
         const task = normalizeTask(await client.get(id))
@@ -2206,10 +2267,10 @@ export function apply(ctx, config) {
       title: `Gopeed ${CONTROL_ACTIONS[args?.action]?.verb ?? 'action'}`,
       kind: 'other',
     }),
-    timeoutMs: 25000,
+    timeoutMs: READ_TOOL_TIMEOUT_MS,
     async execute(args, exec) {
       rememberAgent(exec)
-      await ensureApiPort()
+      await ensureApiPortWithin('gopeed_control', Date.now() + READ_BUDGET_MS)
       const id = reqString(args?.id, 'id')
       const action = reqString(args?.action, 'action').toLowerCase()
       const spec = CONTROL_ACTIONS[action]
@@ -2414,10 +2475,13 @@ export function apply(ctx, config) {
     },
     isConcurrencySafe: () => true,
     presentCall: () => ({ card: 'generic', title: 'Gopeed diagnostics', kind: 'other' }),
-    timeoutMs: 30000,
+    timeoutMs: PROCESS_TOOL_TIMEOUT_MS,
     async execute(_args, exec) {
       rememberAgent(exec)
-      let detectedPort = await ensureApiPort()
+      // One budget for the whole diagnosis: both port phases and the probe fan-out below draw from
+      // it, so a cold host ends with an explained error instead of the DSH kill.
+      const deadline = Date.now() + PROCESS_BUDGET_MS
+      let detectedPort = await ensureApiPortWithin('gopeed_process', deadline)
       const options = {
         host: config.host.get(),
         port: detectedPort || Number(config.port.get()) || 0,
@@ -2429,7 +2493,7 @@ export function apply(ctx, config) {
       // When nothing answers there, ask the OS which port the live process actually holds and
       // retry once. This is what makes "zero configuration" work despite a stale patch value.
       if (api.state === 'refused') {
-        const probed = await ensureApiPort(true)
+        const probed = await ensureApiPortWithin('gopeed_process', deadline, true)
         if (probed > 0 && probed !== options.port) {
           detectedPort = probed
           options.port = probed
@@ -2438,12 +2502,19 @@ export function apply(ctx, config) {
       }
       // Process probing, executable resolution and /info are independent, so run them in
       // parallel to keep total latency down. /info is only asked for when the API already
-      // answers, and its /info payload supplies the `version` field.
-      const [resolved, proc, info] = await Promise.all([
-        resolveExecutable(config.exePath.get()),
-        findProcess(config.exePath.get() || 'Gopeed.exe'),
-        api.state === 'ok' ? client.info().catch(() => ({})) : Promise.resolve({}),
-      ])
+      // answers, and its /info payload supplies the `version` field. The whole fan-out shares the
+      // call budget: each probe shells out, so on a slow host this is the last phase that can
+      // overrun the DSH tool timeout.
+      const [resolved, proc, info] = await cappedAwait(
+        Promise.all([
+          resolveExecutable(config.exePath.get()),
+          findProcess(config.exePath.get() || 'Gopeed.exe'),
+          api.state === 'ok' ? client.info().catch(() => ({})) : Promise.resolve({}),
+        ]),
+        Math.max(500, deadline - Date.now()),
+        `gave up on the process and executable probes after the ${PROCESS_BUDGET_MS}ms budget for ` +
+          'gopeed_process, so no diagnosis was produced. Retry in a moment.',
+      )
       const meta = info && typeof info === 'object' ? info : {}
 
       /** The API verdict wins; process data only supplements it. */
@@ -2491,14 +2562,18 @@ export function apply(ctx, config) {
       if (verdict === 'unresponsive' && proc.probe === 'ok' && proc.found) {
         advice += ` (process pid ${proc.pid} is confirmed alive)`
       }
-      // When even the executable cannot be located, the next step is needed whatever the API
-      // state is: first confirm whether it is installed, then point at the plugin settings page
-      // for a manual path. The API-level advice is kept after it.
-      if (!resolved.path) {
-        advice =
+      // A missing executable is a FALLBACK note, never a verdict. It used to overwrite the advice
+      // unconditionally, so a fully healthy Gopeed (verdict "running") was reported as "Could not
+      // find the Gopeed installation" whenever auto-discovery failed or "exePath" was left empty --
+      // a lie that sent the user to a settings page for a problem they did not have. It now appears
+      // only where the missing path actually changes the next step (the API is not usable, so
+      // gopeed_launch may have nothing to start), and it is appended AFTER the real diagnosis, so
+      // the more important advice always survives.
+      if (!resolved.path && verdict !== 'running' && verdict !== 'unauthorized') {
+        const exeNote =
           'Could not find the Gopeed installation: if it is installed (for example a portable build), ' +
-          'set "Executable path" in the plugin settings to the full path of Gopeed.exe.' +
-          (advice ? ` (Also: ${advice})` : '')
+          'set "Executable path" in the plugin settings to the full path of Gopeed.exe.'
+        advice = advice ? `${advice}\n${exeNote}` : exeNote
       }
       // Newcomer guidance only appears in failure branches (API unreachable = not installed /
       // not started / protocol not TCP). The success path stays short.

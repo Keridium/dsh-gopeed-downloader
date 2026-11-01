@@ -7,7 +7,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries a
 this file is part of the repository that both people and agents read; the Chinese edition of the
 project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gopeed-downloader/blob/main/docs/README.zh.md).
 
-## [Unreleased]
+## [0.3.3] - 2026-11-01
+
+### Fixed
+
+- **`gopeed_process` claimed "Could not find the Gopeed installation" while reporting `verdict: running`.**
+  The missing-path note overwrote the advice unconditionally, so a healthy Gopeed with an empty
+  `exePath` -- or any host where discovery failed -- was told its installation was missing. The note is
+  now appended only when the verdict is neither `running` nor `unauthorized`, and it never replaces the
+  real diagnosis.
+- **The read-only tools could be killed by their own tool timeout with nothing to show for it.**
+  `gopeed_list`, `gopeed_status`, `gopeed_control` and `gopeed_process` awaited port detection with no
+  internal bound, so a cold or unreachable Gopeed ended the call at DSH's 25-second (30 for `process`)
+  limit and returned no explanation. They now run inside the same style of budget the write path already
+  used: the port phase is capped at 12 seconds, the whole call at 22.5 (27.5 for `process`), and a stuck
+  call fails at about 12 seconds with an actionable message.
+- **`stopProcess` announced success without evidence the process had exited.**
+  `waitForProcessExit` returned `ok: true, verifiable: false` when the process table was unreadable, so a
+  kill that could not be confirmed was reported as "killed pid N". An unverifiable outcome is now
+  `ok: false, unknown: true`, which the caller already handles as a failure.
+- **A correct POSIX path was rejected as "not an executable file".** Both the candidate extractor and the
+  configured-path check tested for a literal `.exe` suffix, so macOS and Linux paths could never be
+  accepted. Windows keeps that exact rule (dropping it would let `.ini`/`.txt` through); other platforms
+  now require a regular file with the execute bit.
 
 ### Added
 
@@ -16,14 +38,15 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
   that never opens it behaves exactly as if the contract did not exist, and the symptom is an agent reaching
   for a shell to download something the plugin exists to download. One prompt section (`tool:gopeed`, placed
   with the network tools, 97 characters) now says that `gopeed_add` is the default download tool, that it
-  runs as a background job, and that progress must not be polled. It is an optional dependency: a host
-  without the `systemPrompt` service still gets the seven tools, just without the reminder.
+  runs as a background job, and that progress must not be polled. It is an optional dependency, and it emits
+  nothing when the tool is not visible in the current scope, so a restricted host is never told to call
+  something it cannot see.
 
 ### Changed
 
 - **The agent contract now says not to download with a shell.** `docs/AGENTS.md` gained the rule that a
-  download goes through `gopeed_add` rather than `curl`/`wget`/`Invoke-WebRequest`, and why: a shell
-  download blocks the turn, cannot be paused or resumed, and leaves the session with nothing to wait on.
+  download goes through `gopeed_add` rather than a shell download, and why: a shell download blocks the
+  turn, cannot be paused or resumed, and leaves the session with nothing to wait on.
 - **The package is published on npm.** The README now leads with the registry install and keeps the Git spec
   as the pinned alternative. Nothing has to be installed on the machine first -- the profile carries its own
   package manager -- and `publishConfig` pins publishing to the public registry.

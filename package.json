@@ -1,6 +1,6 @@
 {
   "name": "dsh-gopeed-downloader",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": false,
   "description": "Agent tools for a local Gopeed downloader: create, inspect, pause, resume and remove downloads; diagnose or launch the Gopeed process; and receive download-complete events, including a background job that can wake an idle agent. The REST tools are cross-platform; process control is Windows-only.",
   "type": "module",
