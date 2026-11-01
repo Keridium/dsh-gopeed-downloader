@@ -15,7 +15,7 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
   when to use these tools and what not to do with them, but nothing loads that file automatically: an agent
   that never opens it behaves exactly as if the contract did not exist, and the symptom is an agent reaching
   for `curl` to download something the plugin exists to download. The plugin now registers one prompt section
-  (`tool:gopeed`, order just after the shell tools, 118 characters) stating that downloads go through
+  (`tool:gopeed`, order just after the shell tools, 97 characters) stating that downloads go through
   `gopeed_add` rather than a shell and that progress must not be polled. It is an optional dependency: a host
   without the `systemPrompt` service still gets the seven tools, just without the reminder.
 
