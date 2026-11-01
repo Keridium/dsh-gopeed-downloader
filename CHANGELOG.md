@@ -7,7 +7,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries a
 this file is part of the repository that both people and agents read; the Chinese edition of the
 project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gopeed/blob/main/docs/README.zh.md).
 
-## [0.3.1] - unreleased
+## [0.3.1] - 2026-11-01
 
 ### Fixed
 
