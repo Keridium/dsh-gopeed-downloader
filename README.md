@@ -70,13 +70,22 @@ one. See [Configuration](#configuration).
 
 ## Installation
 
-There is nothing to add by hand. In any DSH session, tell the agent:
+The bundle is on npm. In any DSH session, tell the agent:
 
-> Install the `dsh-gopeed-downloader` bundle from its Git URL.
+> Install the `dsh-gopeed-downloader` bundle from npm.
 
-That is `plugin_manager` with `action: "install_bundle"` and the repository URL as `target`. DSH parses the
-spec, checks reachability, installs it with its own package manager and enables the bundle; restart DSH when
-it asks. Uninstall with `action: "remove_bundle"`, `target: "dsh-gopeed-downloader"`. The Web UI equivalent is
+That is `plugin_manager` with `action: "install_bundle"` and `target: "dsh-gopeed-downloader"`. DSH installs it
+with its own package manager from the registry and enables the bundle; restart DSH when it asks. The
+command-line equivalent is `dsh plugin --profile web add dsh-gopeed-downloader`.
+
+**From Git instead** -- for a development build, or to pin a commit:
+
+> Install the `dsh-gopeed-downloader` bundle from `github:Keridium/dsh-gopeed-downloader`.
+
+Both forms accept a version pin: `dsh-gopeed-downloader@0.3.2`, or
+`github:Keridium/dsh-gopeed-downloader#v0.3.2`.
+
+Uninstall with `action: "remove_bundle"`, `target: "dsh-gopeed-downloader"`. The Web UI equivalent is
 **Plugins -> Installed**.
 
 Then open **Plugins -> Installed -> Gopeed Downloader -> row `gopeed` -> Configure** and, if Gopeed uses a
@@ -92,6 +101,8 @@ gopeed_add  { "url": "https://example.com/file.iso" }
 
 | `target` | Accepted | Notes |
 |---|---|---|
+| `dsh-gopeed-downloader` | yes | An npm package name, resolved from the registry. |
+| `dsh-gopeed-downloader@0.3.2` | yes | The same, pinned to a version. |
 | `github:owner/repo` | yes | pnpm's Git host shorthand. |
 | `git+https://github.com/owner/repo.git` | yes | Standard Git URL; `git+` is stripped before the reachability check. |
 | `https://github.com/owner/repo` | yes | A hosted-repository URL is treated as a Git spec, not a plain web page. |

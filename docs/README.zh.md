@@ -94,11 +94,18 @@ REST 类工具跨平台，进程控制仅支持 Windows。
 
 ## 四、安装
 
-**不需要命令行、不需要 pnpm、也不需要本机装 Node**，全部用一个 DSH 工具完成：
+**插件已发布在 npm**，在任意会话里对 agent 说：
 
-1. 在任意会话里对 agent 说：「用 plugin_manager 安装这个 bundle，target 填插件目录的绝对路径」
-   （对应 `install_bundle`，例如 `D:\path\to\dsh-plugin-gopeed`）
-2. 重启 DSH
+> 用 plugin_manager 安装 `dsh-gopeed-downloader` 这个 bundle。
+
+对应 `install_bundle`，`target` 填包名 `dsh-gopeed-downloader`。DSH 会用自己的包管理器从 registry 装上并启用，
+需要重启时它会提示。命令行等价写法：`dsh plugin --profile web add dsh-gopeed-downloader`。
+
+**也可以从 Git 装**（开发构建，或想锁某个 commit）：
+
+> 安装 `dsh-gopeed-downloader`，target 填 `github:Keridium/dsh-gopeed-downloader`。
+
+两种都支持锁版本：`dsh-gopeed-downloader@0.3.2`、`github:Keridium/dsh-gopeed-downloader#v0.3.2`。
 
 <details>
 <summary>安装 target 支持的三类形式、卸载，以及不重启 DSH 的小技巧</summary>
