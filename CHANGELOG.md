@@ -40,8 +40,8 @@ project README lives in [docs/README.zh.md](https://github.com/Keridium/dsh-gope
   `working_directory` call had moved the session (`cd`) the download still landed in the old project. It now
   asks the `workingDirectory` service for its running projection first (`Service.get(session)`: synchronous,
   folds the in-memory session log, no filesystem I/O) and falls back to `header.cwd` only when the host composes
-  no such service. Measured in one session: `header.cwd` was `D:\Workspace` while the
-  `working-directory/change` event had already moved the session to `D:\Workspace\dsh-plugin-gopeed`, and
+  no such service. Measured in one session: `header.cwd` was `D:\path\to\project-a` while the
+  `working-directory/change` event had already moved the session to `D:\path\to\project-b`, and
   the POST body's `opts.path` carries the second one after the fix. This is also the directory the
   `working_directory` tool reports and the one the filesystem tools resolve relative paths against.
 - **A wrong token made `gopeed_launch` and the settings-page restart wait out the whole readiness budget.**

@@ -108,7 +108,7 @@ gopeed_add  { "url": "https://example.com/file.iso" }
 | `https://github.com/owner/repo` | yes | A hosted-repository URL is treated as a Git spec, not a plain web page. |
 | `github:owner/repo#v0.1.1` | yes | Pin a tag or commit after `#`. |
 | `https://.../repo/archive/refs/tags/v0.1.1.tar.gz` | yes | A `.tgz` / `.tar.gz` URL is a tarball spec and skips Git entirely. |
-| `D:\path\to\dsh-plugin-gopeed` | yes | An **absolute** local directory (development installs). |
+| `D:\path\to\dsh-gopeed-downloader` | yes | An **absolute** local directory (development installs). |
 | a relative path | **no** | Refused: "a local path must be absolute". |
 
 For GitHub Git specs the manager runs `git ls-remote` (5 s default) first, so **`git` must be installed for a
