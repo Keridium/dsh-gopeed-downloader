@@ -122,6 +122,19 @@ REST 类工具跨平台，进程控制仅支持 Windows。
 
 ---
 
+<details>
+<summary>设置页长什么样</summary>
+
+默认状态——下载位置是「工作区」，Webhook 区块收起：
+
+![设置页默认状态](https://raw.githubusercontent.com/Keridium/dsh-gopeed-downloader/main/docs/screenshots/03-config-default.png)
+
+展开后——用的是自定义保存路径，Webhook 区块以 `manual` 模式展开：
+
+![设置页展开态](https://raw.githubusercontent.com/Keridium/dsh-gopeed-downloader/main/docs/screenshots/03-config-full.png)
+
+</details>
+
 ## 五、配置
 
 **侧栏「插件」→「已安装」→ `Gopeed 下载器` → 行 `gopeed` → 「配置」**

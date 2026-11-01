@@ -66,9 +66,11 @@ yarn.lock
 # -- Miscellaneous ------------------------------------------------------------
 # Directory used locally for drafts and screenshots during development
 scratch/
-# Screenshots taken for documentation. They are local working files: README
-# does not embed them, and the package whitelist never included them.
-screenshots/
+# Screenshots taken during development. Only the two the README embeds
+# (docs/screenshots/) are committed; this repository-root directory holds the
+# working set and stays local. The leading slash is deliberate: without it git
+# would also ignore docs/screenshots/.
+/screenshots/
 *.local
 .env
 .env.*

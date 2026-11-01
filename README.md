@@ -106,6 +106,19 @@ dependency, and source edits then need the extra step described in the developme
 
 </details>
 
+<details>
+<summary>What the settings page looks like</summary>
+
+Default state -- save target `workspace`, the webhook block collapsed:
+
+![Settings page, default state](https://raw.githubusercontent.com/Keridium/dsh-gopeed-downloader/main/docs/screenshots/03-config-default.png)
+
+Expanded -- a custom save path, with the webhook block open in `manual` mode:
+
+![Settings page, expanded](https://raw.githubusercontent.com/Keridium/dsh-gopeed-downloader/main/docs/screenshots/03-config-full.png)
+
+</details>
+
 ## Configuration
 
 The form on **Plugins -> Installed -> Gopeed Downloader -> Configure** is *volatile*: saving applies
